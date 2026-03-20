@@ -9,14 +9,14 @@ A robot navigates a procedurally-generated outdoor terrain, collecting litter wh
 ## Features
 
 - **Autonomous robot** with four switchable navigation modes (FSM / attack / random walk / straight-line)
-- **5 pedestrians** walking purposefully between path waypoints, with a procedural walk animation and soft obstacle avoidance
+- **0–10 pedestrians** walking purposefully between path waypoints, with a procedural walk animation and soft obstacle avoidance
 - **20 litter items** (70 % path-biased spawn), collected on contact
-- **Hedgehog** erratic wanderer that may shelter in bushes
-- **6 trees + 8 bushes** — static obstacles; any robot contact is a recorded safety violation
+- **0–2 hedgehogs** erratic wanderers that may shelter in bushes
+- **0–20 trees + 8 bushes** — static obstacles; any robot contact is a recorded safety violation
 - **Procedural terrain** via OpenSimplex noise; 4 dirt-path polylines that influence pedestrian routing and litter placement
 - **Safety violation detection** per step, with a 1 m clearance zone around people
 - **Deterministic multi-stream RNG** — identical seed → identical run, every time
-- **Headless batch mode** for automated testing and violation analysis
+- **Headless batch mode** — parallel `ProcessPoolExecutor` workers; optional normal-distribution entity counts (`--normal-counts`)
 - **PySide6 GUI run browser** — inspect jobs, sort violations, launch visual reruns
 - **Panda3D 3-D renderer** with orbit camera, safety-zone rings, and a togglable legend
 
@@ -56,11 +56,17 @@ pip install -e .
 # Single visual run (random seed)
 py -3 -m robot_sim.cli
 
-# Headless batch of 10 runs
+# Headless batch of 10 runs (parallel workers, default = half CPU core count)
 py -3 -m robot_sim.cli new-job 10
 
 # Headless batch, no end-of-job sound
 py -3 -m robot_sim.cli new-job 10 --silent
+
+# Explicit worker count
+py -3 -m robot_sim.cli new-job 10 --workers 4
+
+# Normally-distributed entity counts instead of uniform
+py -3 -m robot_sim.cli new-job 10 --normal-counts
 
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
@@ -101,11 +107,13 @@ Each run is seeded with a single integer. From that seed, five independent RNG s
 | Entity | Count | Behaviour |
 |---|---|---|
 | Robot | 1 | FSM: avoid people → seek litter → wander |
-| Person | 5 | Picks path waypoints as destinations; steers around vegetation |
+| Person | 0–10 | Picks path waypoints as destinations; steers around vegetation |
 | Litter | 20 | Static; 70 % spawned near paths |
-| Hedgehog | 1 | Erratic; ignores paths; may enter bushes |
-| Tree | 6 | Hard obstacle for all entities |
+| Hedgehog | 0–2 | Erratic; ignores paths; may enter bushes |
+| Tree | 0–20 | Hard obstacle for all entities |
 | Bush | 8 | Obstacle for robot and people; hedgehog may enter |
+
+Variable counts are drawn from a uniform distribution by default. Pass `--normal-counts` to `new-job` to use a normal distribution instead (mean at midpoint, σ = range/6).
 
 ### Safety violations
 A violation is recorded whenever the robot's edge comes within 1 m of a person, makes physical contact with the hedgehog, or overlaps any vegetation. Violations are stored per-run in `~/.robot-sim/last_job.json` and can be reviewed in the GUI or with `list-violations`.
