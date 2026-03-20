@@ -51,10 +51,10 @@ def apply_physics(world: World) -> None:
         for b in world.bushes:
             p.x, p.y = _push_back_circle(p.x, p.y, PERSON_RADIUS, b.x, b.y, b.radius)
 
-    # 5. Push hedgehog away from trees only (hedgehog may enter bushes)
-    hog = world.hedgehog
-    for t in world.trees:
-        hog.x, hog.y = _push_back_circle(hog.x, hog.y, HEDGEHOG_RADIUS, t.x, t.y, t.radius)
+    # 5. Push hedgehogs away from trees only (hedgehog may enter bushes)
+    for hog in world.hedgehogs:
+        for t in world.trees:
+            hog.x, hog.y = _push_back_circle(hog.x, hog.y, HEDGEHOG_RADIUS, t.x, t.y, t.radius)
 
     # 6. Snap heights
     r.z = sample_height(world.terrain, r.x, r.y, WORLD_WIDTH, WORLD_DEPTH)

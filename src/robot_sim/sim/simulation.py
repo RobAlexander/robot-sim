@@ -10,12 +10,11 @@ from ..constants import (
     STEPS_PER_SECOND, STEP_DT, RUN_STEPS,
     WORLD_WIDTH, WORLD_DEPTH, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT,
     ROBOT_SPEED, ROBOT_TURN_RATE,
-    NUM_PEOPLE, PERSON_SPEED, PERSON_TURN_RATE, PERSON_ARRIVE_RADIUS,
+    NUM_PEOPLE_MIN, NUM_PEOPLE_MAX, PERSON_SPEED, PERSON_TURN_RATE, PERSON_ARRIVE_RADIUS,
     NUM_LITTER, COLLECT_RADIUS,
     AVOIDANCE_DISTANCE,
-    HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL,
+    NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX, HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL,
     LITTER_PATH_BIAS,
-    NUM_TREES, NUM_BUSHES, TREE_RADIUS, BUSH_RADIUS,
     NavMode,
 )
 from .terrain import generate_heightmap, sample_height
@@ -43,8 +42,8 @@ class StepResult:
     person_headings: list[float]
     litter_positions: list[tuple[int, float, float, float]]  # (id, x, y, z) uncollected only
     litter_collected_ids: list[int]                       # collected this step
-    hedgehog_pos: tuple[float, float, float]
-    hedgehog_heading: float
+    hedgehog_positions: list[tuple[float, float, float]]
+    hedgehog_headings: list[float]
     violations: list[Violation]
     sim_complete: bool
 
@@ -53,13 +52,28 @@ class StepResult:
 # World factory
 # ---------------------------------------------------------------------------
 
-def _build_world(seed: int) -> tuple[World, random.Random]:
+def _normal_int(rng: random.Random, lo: int, hi: int) -> int:
+    """Draw an integer from a normal distribution centred in [lo, hi], clamped to that range."""
+    mu = (lo + hi) / 2
+    sigma = (hi - lo) / 6
+    return max(lo, min(hi, round(rng.gauss(mu, sigma))))
+
+
+def _build_world(seed: int, normal_counts: bool = False) -> tuple[World, random.Random]:
     rng = random.Random(seed)
 
     terrain = generate_heightmap(seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT)
 
     # Paths are generated from a dedicated stream; never touch main rng
     paths = generate_paths(seed, WORLD_WIDTH, WORLD_DEPTH)
+
+    # Draw variable counts from main RNG (must be done before any spawns)
+    if normal_counts:
+        num_people = _normal_int(rng, NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+        num_hedgehogs = _normal_int(rng, NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
+    else:
+        num_people = rng.randint(NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+        num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
 
     # Place robot away from edges
     margin = 5.0
@@ -69,7 +83,7 @@ def _build_world(seed: int) -> tuple[World, random.Random]:
     )
 
     people: list[Person] = []
-    for pid in range(NUM_PEOPLE):
+    for pid in range(num_people):
         px, py = sample_near_path(rng, paths, WORLD_WIDTH, WORLD_DEPTH, spread=0.8)
         p = Person(id=pid, x=px, y=py)
         p.init_rng(random.Random(seed + pid + 1), paths=paths,
@@ -85,15 +99,15 @@ def _build_world(seed: int) -> tuple[World, random.Random]:
             ly = rng.uniform(0.5, WORLD_DEPTH - 0.5)
         litter.append(Litter(id=lid, x=lx, y=ly))
 
-    hedgehog = Hedgehog(x=rng.uniform(5, WORLD_WIDTH - 5), y=rng.uniform(5, WORLD_DEPTH - 5))
-    hedgehog.init_rng(random.Random(seed + 2000))
+    hedgehogs: list[Hedgehog] = []
+    for hid in range(num_hedgehogs):
+        hog = Hedgehog(x=rng.uniform(5, WORLD_WIDTH - 5), y=rng.uniform(5, WORLD_DEPTH - 5))
+        hog.init_rng(random.Random(seed + 2000 + hid))
+        hedgehogs.append(hog)
 
-    trees, bushes = generate_vegetation(
-        seed, WORLD_WIDTH, WORLD_DEPTH, paths,
-        NUM_TREES, NUM_BUSHES, TREE_RADIUS, BUSH_RADIUS,
-    )
+    trees, bushes = generate_vegetation(seed, WORLD_WIDTH, WORLD_DEPTH, paths, normal_counts=normal_counts)
 
-    world = World(seed=seed, terrain=terrain, robot=robot, hedgehog=hedgehog,
+    world = World(seed=seed, terrain=terrain, robot=robot, hedgehogs=hedgehogs,
                   paths=paths, people=people, litter=litter,
                   trees=trees, bushes=bushes)
     apply_physics(world)  # snap heights and push-back for initial positions
@@ -243,12 +257,20 @@ def _collect_litter(world: World) -> list[int]:
 # ---------------------------------------------------------------------------
 
 class Simulation:
-    def __init__(self, seed: int) -> None:
+    def __init__(self, seed: int, normal_counts: bool = False) -> None:
         self.seed = seed
         self.step_count = 0
-        self.world, self._rng = _build_world(seed)
+        self.world, self._rng = _build_world(seed, normal_counts=normal_counts)
         self.all_violations: list[Violation] = []
         self.nav_mode: NavMode = NavMode.ATTACK
+
+    @property
+    def entity_counts(self) -> dict[str, int]:
+        return {
+            "num_people": len(self._world.people),
+            "num_trees": len(self._world.trees),
+            "num_hedgehogs": len(self._world.hedgehogs),
+        }
 
     # Expose world read-only by convention
     @property
@@ -271,9 +293,9 @@ class Simulation:
                    PERSON_TURN_RATE, PERSON_ARRIVE_RADIUS,
                    paths=self._world.paths, obstacles=obstacles)
 
-        hog = self._world.hedgehog
-        hog.step(STEP_DT, WORLD_WIDTH, WORLD_DEPTH, HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL)
-        hog.z = sample_height(self._world.terrain, hog.x, hog.y, WORLD_WIDTH, WORLD_DEPTH)
+        for hog in self._world.hedgehogs:
+            hog.step(STEP_DT, WORLD_WIDTH, WORLD_DEPTH, HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL)
+            hog.z = sample_height(self._world.terrain, hog.x, hog.y, WORLD_WIDTH, WORLD_DEPTH)
 
         apply_physics(self._world)
 
@@ -285,7 +307,6 @@ class Simulation:
         self.step_count += 1
 
         r = self._world.robot
-        hog = self._world.hedgehog
         result = StepResult(
             step=self.step_count,
             robot_pos=(r.x, r.y, r.z),
@@ -298,8 +319,8 @@ class Simulation:
                 if not lit.collected
             ],
             litter_collected_ids=collected_ids,
-            hedgehog_pos=(hog.x, hog.y, hog.z),
-            hedgehog_heading=hog.heading,
+            hedgehog_positions=[(h.x, h.y, h.z) for h in self._world.hedgehogs],
+            hedgehog_headings=[h.heading for h in self._world.hedgehogs],
             violations=violations,
             sim_complete=self.step_count >= RUN_STEPS,
         )

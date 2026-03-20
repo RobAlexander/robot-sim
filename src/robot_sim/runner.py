@@ -14,14 +14,18 @@ def run_simulation(
     seed: int,
     renderer: Renderer,
     speed_multiplier: float = 1.0,
-) -> list[Violation]:
+    normal_counts: bool = False,
+) -> tuple[list[Violation], dict[str, int]]:
     """
-    Run one full simulation (RUN_STEPS ticks) and return all safety violations.
+    Run one full simulation (RUN_STEPS ticks).
+
+    Returns (violations, entity_counts) where entity_counts is a dict with
+    keys num_people, num_trees, num_hedgehogs.
 
     The renderer is updated every step.  Wall-clock throttling is delegated to
     renderer.sleep_for_realtime() so that NullRenderer can skip it entirely.
     """
-    sim = Simulation(seed)
+    sim = Simulation(seed, normal_counts=normal_counts)
     wall_start = time.perf_counter()
 
     result: StepResult | None = None
@@ -42,4 +46,4 @@ def run_simulation(
             break
 
     renderer.play_end_tune()
-    return sim.all_violations
+    return sim.all_violations, sim.entity_counts

@@ -11,9 +11,11 @@ robot-sim list-violations [M]    list recorded violations (all runs, or run M)
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -109,18 +111,34 @@ def default(
 
     renderer = _make_visual_renderer(seed)
     try:
-        violations = run_simulation(seed, renderer, speed_multiplier=speed)
+        violations, counts = run_simulation(seed, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 
     # Persist as a single-run job so rerun works
     rec = RunRecord(run_number=1, seed=seed)
     rec.add_violations(violations)
+    rec.counts = counts
     job = Job(runs=[rec])
     save_job(job)
 
     typer.echo(f"\nCompleted - {_violation_summary(violations)}")
     _print_summary(job.runs)
+
+
+# ---------------------------------------------------------------------------
+# Batch worker (module-level so pickle can serialise it for ProcessPoolExecutor)
+# ---------------------------------------------------------------------------
+
+def _batch_worker(seed: int, run_number: int, total: int, normal_counts: bool = False) -> tuple[int, list, dict]:
+    """Executed in a child process for one headless simulation run."""
+    renderer = _make_null_renderer()
+    violations, counts = run_simulation(seed, renderer, normal_counts=normal_counts)
+    typer.echo(
+        f"  run {run_number}/{total}  seed={seed}  "
+        f"{_violation_summary(violations)}"
+    )
+    return run_number, violations, counts
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +149,21 @@ def default(
 def new_job(
     n: Annotated[int, typer.Argument(help="Number of runs in the job")] = 1,
     silent: Annotated[bool, typer.Option("--silent", "-q", help="Suppress end-of-job sound")] = False,
+    workers: Annotated[Optional[int], typer.Option(
+        "--workers", "-w",
+        help="Worker processes (default: half of CPU core count).",
+    )] = None,
+    normal_counts: Annotated[bool, typer.Option(
+        "--normal-counts",
+        help="Draw entity counts from a normal distribution (mean at midpoint, sigma=range/6) instead of uniform.",
+    )] = False,
 ) -> None:
     """Run a headless batch of N simulations."""
     if n < 1:
         typer.echo("[error] N must be at least 1", err=True)
         raise typer.Exit(1)
+
+    num_workers = workers if workers is not None else max(1, (os.cpu_count() or 2) // 2)
 
     seeds = generate_seeds(n)
     job = Job()
@@ -145,18 +173,22 @@ def new_job(
         job.runs.append(RunRecord(run_number=i, seed=s))
     save_job(job)
 
-    typer.echo(f"Starting headless job: {n} run(s)")
+    typer.echo(f"Starting headless job: {n} run(s)  workers={num_workers}")
 
-    renderer = _make_null_renderer()
-    for rec in job.runs:
-        typer.echo(f"  run {rec.run_number}/{n}  seed={rec.seed} … ", nl=False)
-        violations = run_simulation(rec.seed, renderer)
-        rec.add_violations(violations)
-        typer.echo(_violation_summary(violations))
+    job_start = time.monotonic()
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        futures = {pool.submit(_batch_worker, rec.seed, rec.run_number, n, normal_counts): rec for rec in job.runs}
+        for future in as_completed(futures):
+            run_number, violations, counts = future.result()
+            rec = job.get_run(run_number)
+            rec.add_violations(violations)
+            rec.counts = counts
+    elapsed = time.monotonic() - job_start
 
     save_job(job)  # overwrite with violation data
 
     _print_summary(job.runs)
+    typer.echo(f"Time: {elapsed:.1f}s  ({n / elapsed:.2f} runs/s)  workers={num_workers}\n")
     _play_end_tune_headless(silent=silent)
 
 
@@ -186,7 +218,7 @@ def rerun(
 
     renderer = _make_visual_renderer(rec.seed)
     try:
-        violations = run_simulation(rec.seed, renderer, speed_multiplier=speed)
+        violations, _ = run_simulation(rec.seed, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 
@@ -243,6 +275,47 @@ def list_violations(
                 typer.echo(f"  {v['step']:>6}  {target:>8}  {v['distance']:>8.3f}  {robot_pos:^17}  {target_pos:^17}")
 
     typer.echo(f"\nTotal: {total} violation(s) across {len(runs)} run(s)")
+
+
+# ---------------------------------------------------------------------------
+# plot-stats subcommand
+# ---------------------------------------------------------------------------
+
+@app.command("plot-stats")
+def plot_stats(
+    output: Annotated[Optional[str], typer.Option(
+        "--output", "-o",
+        help="Save plot to this file path (e.g. stats.png). Omit to display interactively.",
+    )] = None,
+) -> None:
+    """Plot entity-count distributions from the last job."""
+    try:
+        job = load_job()
+    except FileNotFoundError as exc:
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+
+    runs_with_counts = [r for r in job.runs if r.counts]
+    if not runs_with_counts:
+        typer.echo(
+            "[error] No entity count data in last job. "
+            "Re-run 'new-job' to collect counts.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    try:
+        from .stats import plot_entity_stats
+    except ImportError as exc:
+        typer.echo(f"[error] Cannot generate plots: {exc}", err=True)
+        typer.echo("[hint] Install matplotlib: py -3 -m pip install matplotlib", err=True)
+        raise typer.Exit(1)
+
+    plot_entity_stats(runs_with_counts, output_path=output)
+    if output:
+        typer.echo(f"Saved stats plot to {output}")
+    else:
+        typer.echo(f"Displayed stats plot for {len(runs_with_counts)} run(s).")
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,12 @@ py -3 -m robot_sim.cli new-job 10
 # Headless batch, no end-of-job sound
 py -3 -m robot_sim.cli new-job 10 --silent
 
+# Headless batch with explicit worker count
+py -3 -m robot_sim.cli new-job 10 --workers 4
+
+# Headless batch with normally-distributed entity counts
+py -3 -m robot_sim.cli new-job 10 --normal-counts
+
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
 
@@ -102,11 +108,14 @@ robot-sim/
 | Entity | Count | Notes |
 |---|---|---|
 | Robot | 1 | FSM: avoid person → seek litter → wander (default nav mode: ATTACK) |
-| Person | 5 | Destination-seeking; prefers path waypoints; avoids vegetation; safety-critical |
+| Person | 0–10 | Destination-seeking; prefers path waypoints; avoids vegetation; safety-critical |
 | Litter | 20 | 70% spawns near paths; disappears when collected |
-| Hedgehog | 1 | Erratic wanderer; ignores paths; may enter bushes |
-| Tree | 6 | Static hard obstacle; blocks robot, people, hedgehog; robot contact = violation |
+| Hedgehog | 0–2 | Erratic wanderer; ignores paths; may enter bushes |
+| Tree | 0–20 | Static hard obstacle; blocks robot, people, hedgehog; robot contact = violation |
 | Bush | 8 | Static obstacle; blocks robot and people; hedgehog may enter; robot contact = violation |
+
+Count ranges are drawn uniformly by default. Pass `--normal-counts` to `new-job` to draw
+from a normal distribution instead (μ = midpoint of range, σ = range/6, clamped to range).
 
 ## Key Architectural Rules
 
@@ -141,7 +150,12 @@ robot-sim/
    `subprocess.Popen` when launching rerun from the GUI, so Panda3D finds its own
    DLLs without interference from Qt's PATH additions.
 
-8. **Silent audio** – `new-job --silent` (or `-q`) suppresses the end-of-job tune.
+8. **Headless parallelism** – `new-job` uses `ProcessPoolExecutor` (not threads) so each
+   worker gets its own OS process and GIL. Worker count defaults to half the CPU core
+   count; override with `--workers N`. The batch worker `_batch_worker` is a module-level
+   function (not a closure) so pickle can serialise it for the `spawn` start method on Windows.
+
+9. **Silent audio** – `new-job --silent` (or `-q`) suppresses the end-of-job tune.
    Audio is also suppressed automatically when `PYTEST_CURRENT_TEST` is set or
    `pytest` is present in `sys.modules`, so test runs are always silent.
 

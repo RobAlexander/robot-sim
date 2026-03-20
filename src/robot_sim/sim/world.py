@@ -18,7 +18,7 @@ class World:
     seed: int
     terrain: np.ndarray          # shape (TERRAIN_CELLS, TERRAIN_CELLS), float32 heights
     robot: Robot
-    hedgehog: Hedgehog
+    hedgehogs: list[Hedgehog]
     paths: list[list[tuple[float, float]]]   # static polylines, generated from seed
     people: list[Person] = field(default_factory=list)
     litter: list[Litter] = field(default_factory=list)

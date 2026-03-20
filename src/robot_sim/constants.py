@@ -29,7 +29,8 @@ ROBOT_SPEED: float = 0.8     # m/s cruising speed
 ROBOT_TURN_RATE: float = 1.2  # rad/s max turn rate
 
 # People
-NUM_PEOPLE: int = 5
+NUM_PEOPLE_MIN: int = 0
+NUM_PEOPLE_MAX: int = 10
 PERSON_RADIUS: float = 0.3   # metres
 PERSON_SPEED: float = 1.3          # m/s (~4.7 km/h, normal walking pace)
 PERSON_TURN_RATE: float = 2.0      # rad/s max turn rate
@@ -49,12 +50,15 @@ AVOIDANCE_DISTANCE: float = 2.5  # robot starts steering away at this distance
 JOB_FILE: str = "~/.robot-sim/last_job.json"
 
 # Vegetation
-NUM_TREES: int = 6
+NUM_TREES_MIN: int = 0
+NUM_TREES_MAX: int = 20
 NUM_BUSHES: int = 8
 TREE_RADIUS: float = 0.4    # trunk radius (metres)
 BUSH_RADIUS: float = 0.8    # spreading radius (metres)
 
 # Hedgehog
+NUM_HEDGEHOGS_MIN: int = 0
+NUM_HEDGEHOGS_MAX: int = 2
 HEDGEHOG_SPEED: float = 0.55  # m/s (~2 km/h, active foraging pace)
 HEDGEHOG_TURN_INTERVAL: int = 60   # steps (~2 s)
 HEDGEHOG_RADIUS: float = 0.15      # metres

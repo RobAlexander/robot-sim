@@ -21,6 +21,7 @@ class RunRecord:
     run_number: int        # 1-based
     seed: int
     violations: list[dict[str, Any]] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
 
     def add_violations(self, violations: list[Violation]) -> None:
         self.violations = [
@@ -43,6 +44,7 @@ class RunRecord:
     def from_dict(cls, d: dict[str, Any]) -> "RunRecord":
         rec = cls(run_number=d["run_number"], seed=d["seed"])
         rec.violations = d.get("violations", [])
+        rec.counts = d.get("counts", {})
         return rec
 
 

@@ -11,6 +11,7 @@ import random
 from dataclasses import dataclass
 
 from .paths import nearest_path_info, _Paths
+from ..constants import NUM_TREES_MIN, NUM_TREES_MAX, NUM_BUSHES, TREE_RADIUS, BUSH_RADIUS
 
 
 @dataclass
@@ -36,13 +37,21 @@ def generate_vegetation(
     world_width: float,
     world_depth: float,
     paths: _Paths,
-    num_trees: int,
-    num_bushes: int,
-    tree_radius: float,
-    bush_radius: float,
+    normal_counts: bool = False,
 ) -> tuple[list[Tree], list[Bush]]:
-    """Return trees and bushes placed away from path centrelines."""
+    """Return trees and bushes placed away from path centrelines.
+
+    Tree count is drawn as the first RNG call so that both sim and renderer
+    regenerate identical vegetation from the same seed without coupling to any
+    other RNG stream.
+    """
     rng = random.Random(seed + 3000)
+    if normal_counts:
+        mu = (NUM_TREES_MIN + NUM_TREES_MAX) / 2
+        sigma = (NUM_TREES_MAX - NUM_TREES_MIN) / 6
+        num_trees = max(NUM_TREES_MIN, min(NUM_TREES_MAX, round(rng.gauss(mu, sigma))))
+    else:
+        num_trees = rng.randint(NUM_TREES_MIN, NUM_TREES_MAX)
     margin = 3.0
     path_clearance = 3.0  # keep centre at least this far from nearest path
 
@@ -59,9 +68,9 @@ def generate_vegetation(
             rng.uniform(margin, world_depth - margin),
         )
 
-    trees = [Tree(id=i, x=x, y=y, radius=tree_radius)
+    trees = [Tree(id=i, x=x, y=y, radius=TREE_RADIUS)
              for i, (x, y) in enumerate(_candidate() for _ in range(num_trees))]
-    bushes = [Bush(id=i, x=x, y=y, radius=bush_radius)
-              for i, (x, y) in enumerate(_candidate() for _ in range(num_bushes))]
+    bushes = [Bush(id=i, x=x, y=y, radius=BUSH_RADIUS)
+              for i, (x, y) in enumerate(_candidate() for _ in range(NUM_BUSHES))]
 
     return trees, bushes

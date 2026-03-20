@@ -49,7 +49,7 @@ from ..constants import (
     TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT,
     SAFETY_DISTANCE_M, ROBOT_RADIUS, PERSON_RADIUS,
     HEDGEHOG_RADIUS, HEDGEHOG_SAFETY_DISTANCE_M,
-    NUM_PATHS, NUM_TREES, NUM_BUSHES, TREE_RADIUS, BUSH_RADIUS,
+    NUM_PATHS,
     NavMode,
 )
 
@@ -188,7 +188,6 @@ class PandaRenderer(Renderer):
 
         self._veg_trees, self._veg_bushes = generate_vegetation(
             world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths,
-            NUM_TREES, NUM_BUSHES, TREE_RADIUS, BUSH_RADIUS,
         )
 
         self._setup_lights()
@@ -222,9 +221,9 @@ class PandaRenderer(Renderer):
         self._person_limbs: list[tuple[NodePath, NodePath, NodePath, NodePath]] = []
         self._person_walk_phases: list[float] = []
         self._litter_nps: dict[int, NodePath] = {}
-        self._hedgehog_np: NodePath | None = None
-        self._hedgehog_ring_np: NodePath | None = None
-        self._hedgehog_red_timer: int = 0
+        self._hedgehog_nps: list[NodePath] = []
+        self._hedgehog_ring_nps: list[NodePath | None] = []
+        self._hedgehog_red_timers: list[int] = []
         self._safety_ring_yellow_nps: list[NodePath] = []   # shown when clear
         self._safety_ring_red_nps:    list[NodePath] = []   # shown when violated
 
@@ -585,8 +584,9 @@ class PandaRenderer(Renderer):
                 ring.hide()
             for ring in self._safety_ring_red_nps:
                 ring.hide()
-            if self._hedgehog_ring_np is not None:
-                self._hedgehog_ring_np.hide()
+            for ring in self._hedgehog_ring_nps:
+                if ring is not None:
+                    ring.hide()
 
     # ------------------------------------------------------------------
     # Orbit camera
@@ -766,27 +766,36 @@ class PandaRenderer(Renderer):
             if cid in self._litter_nps:
                 self._litter_nps[cid].hide()
 
-        # Hedgehog
-        hx, hy, hz = result.hedgehog_pos
-        if self._hedgehog_np is None:
-            self._hedgehog_np = self._build_hedgehog()
-        self._hedgehog_np.setPos(hx, hy, hz)
-        self._hedgehog_np.setH(_panda_h(result.hedgehog_heading))
+        # Hedgehogs
+        hog_hit_idxs = {
+            i for i, (hx, hy, _) in enumerate(result.hedgehog_positions)
+            if any(
+                v.person_id is None
+                and abs(v.person_x - hx) < 0.01
+                and abs(v.person_y - hy) < 0.01
+                for v in result.violations
+            )
+        }
+        for i, (hx, hy, hz) in enumerate(result.hedgehog_positions):
+            if i >= len(self._hedgehog_nps):
+                self._hedgehog_nps.append(self._build_hedgehog())
+                self._hedgehog_ring_nps.append(None)
+                self._hedgehog_red_timers.append(0)
+            self._hedgehog_nps[i].setPos(hx, hy, hz)
+            self._hedgehog_nps[i].setH(_panda_h(result.hedgehog_headings[i]))
 
-        # Hedgehog collision ring (only shown while red-linger timer is active)
-        hog_hit = any(v.person_id is None for v in result.violations)
-        if hog_hit:
-            self._hedgehog_red_timer = _RED_LINGER_STEPS
-        elif self._hedgehog_red_timer > 0:
-            self._hedgehog_red_timer -= 1
+            if i in hog_hit_idxs:
+                self._hedgehog_red_timers[i] = _RED_LINGER_STEPS
+            elif self._hedgehog_red_timers[i] > 0:
+                self._hedgehog_red_timers[i] -= 1
 
-        if self._circles_visible and self._hedgehog_red_timer > 0:
-            if self._hedgehog_ring_np is None:
-                self._hedgehog_ring_np = self._make_ring(_HOG_RING_R, 1.0, 0.12, 0.12)
-            self._hedgehog_ring_np.setPos(hx, hy, hz + 0.05)
-            self._hedgehog_ring_np.show()
-        elif self._hedgehog_ring_np is not None:
-            self._hedgehog_ring_np.hide()
+            if self._circles_visible and self._hedgehog_red_timers[i] > 0:
+                if self._hedgehog_ring_nps[i] is None:
+                    self._hedgehog_ring_nps[i] = self._make_ring(_HOG_RING_R, 1.0, 0.12, 0.12)
+                self._hedgehog_ring_nps[i].setPos(hx, hy, hz + 0.05)
+                self._hedgehog_ring_nps[i].show()
+            elif self._hedgehog_ring_nps[i] is not None:
+                self._hedgehog_ring_nps[i].hide()
 
         self._app.taskMgr.step()
 

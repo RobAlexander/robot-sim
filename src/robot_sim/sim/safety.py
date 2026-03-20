@@ -38,14 +38,14 @@ def check_violations(world: World, step: int) -> list[Violation]:
                 target=f"person {p.id}",
             ))
 
-    hog = world.hedgehog
-    edge_dist = math.hypot(r.x - hog.x, r.y - hog.y) - ROBOT_RADIUS - HEDGEHOG_RADIUS
-    if edge_dist < HEDGEHOG_SAFETY_DISTANCE_M:
-        violations.append(Violation(
-            step=step, person_id=None, distance=edge_dist,
-            robot_x=r.x, robot_y=r.y, person_x=hog.x, person_y=hog.y,
-            target="hedgehog",
-        ))
+    for hog in world.hedgehogs:
+        edge_dist = math.hypot(r.x - hog.x, r.y - hog.y) - ROBOT_RADIUS - HEDGEHOG_RADIUS
+        if edge_dist < HEDGEHOG_SAFETY_DISTANCE_M:
+            violations.append(Violation(
+                step=step, person_id=None, distance=edge_dist,
+                robot_x=r.x, robot_y=r.y, person_x=hog.x, person_y=hog.y,
+                target="hedgehog",
+            ))
 
     for t in world.trees:
         edge_dist = math.hypot(r.x - t.x, r.y - t.y) - ROBOT_RADIUS - t.radius
