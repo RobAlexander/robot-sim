@@ -60,6 +60,8 @@ def apply_physics(world: World) -> None:
     r.z = sample_height(world.terrain, r.x, r.y, WORLD_WIDTH, WORLD_DEPTH)
     for p in world.people:
         p.z = sample_height(world.terrain, p.x, p.y, WORLD_WIDTH, WORLD_DEPTH)
+    for hog in world.hedgehogs:
+        hog.z = sample_height(world.terrain, hog.x, hog.y, WORLD_WIDTH, WORLD_DEPTH)
     for lit in world.litter:
         if not lit.collected:
             lit.z = sample_height(world.terrain, lit.x, lit.y, WORLD_WIDTH, WORLD_DEPTH)

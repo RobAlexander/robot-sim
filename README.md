@@ -18,6 +18,7 @@ A robot navigates a procedurally-generated outdoor terrain, collecting litter wh
 - **Deterministic multi-stream RNG** — identical seed → identical run, every time
 - **Headless batch mode** — parallel `ProcessPoolExecutor` workers; optional normal-distribution entity counts (`--normal-counts`)
 - **Hillclimbing situation search** — `--search hillclimbing` finds the entity configuration (people / hedgehogs / trees) that maximises safety violations, then runs the batch with that configuration
+- **Genetic algorithm situation search** — `--search genetic` optimises entity *placements* (x, y positions) via a DEAP-powered GA; maximises safety violations over multiple generations
 - **PySide6 GUI run browser** — inspect jobs, sort violations, launch visual reruns
 - **Panda3D 3-D renderer** with orbit camera, safety-zone rings, and a togglable legend
 
@@ -71,6 +72,9 @@ py -3 -m robot_sim.cli new-job 10 --normal-counts
 
 # Hillclimbing search for worst-case entity configuration, then run 10 times
 py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
+
+# Genetic algorithm search for worst-case entity placements, then run 10 times
+py -3 -m robot_sim.cli new-job 10 --search genetic --silent
 
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
@@ -127,6 +131,7 @@ A violation is recorded whenever the robot's edge comes within 1 m of a person, 
 
 - **`--search random`** (default) — counts are drawn independently per run from a uniform (or normal with `--normal-counts`) distribution.
 - **`--search hillclimbing`** — performs a coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space before the batch runs. Each hillclimbing step evaluates the current configuration and all ±1 neighbours using the **same shared seeds**, so only entity-count differences drive the score; seed noise cancels out. The worst-case configuration found is then used for all `n` runs in the batch.
+- **`--search genetic`** — runs a genetic algorithm (via DEAP) over entity *placements* (x, y positions for every person, hedgehog, tree, and bush) at midpoint counts. Population size 20, blend crossover, Gaussian mutation, elitism. The best placement found is used for all `n` runs.
 
 ---
 
@@ -136,7 +141,7 @@ A violation is recorded whenever the robot's edge comes within 1 m of a person, 
 src/robot_sim/
 ├── cli.py              # Typer CLI entry point
 ├── constants.py        # All magic numbers in one place
-├── generators.py       # Situation generators: random and hillclimbing search
+├── generators.py       # Situation generators: random, hillclimbing, and GA search
 ├── job.py              # Batch orchestration + JSON persistence
 ├── runner.py           # Step loop, speed control, renderer relay
 ├── sim/
@@ -158,6 +163,23 @@ src/robot_sim/
     ├── main_window.py  # PySide6 run browser window
     └── models.py       # Qt table models
 ```
+
+---
+
+## Testing
+
+```bash
+# Install test dependencies
+pip install -e ".[test]"
+
+# Run all tests (fast)
+py -3 -m pytest tests/ -v
+
+# Skip slow integration tests
+py -3 -m pytest tests/ -v -m "not slow"
+```
+
+Tests cover `entity_list` determinism (people/hedgehog/tree/bush positions are pinned by the list; robot and litter vary with seed) and the GA generator (`_decode_genome` unit tests, mocked generate, full integration).
 
 ---
 

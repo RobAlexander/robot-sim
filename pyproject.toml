@@ -14,10 +14,18 @@ dependencies = [
     "numpy>=1.26",
     "matplotlib>=3.8",
     "PySide6>=6.5",
+    "deap",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
 
 [project.scripts]
 robot-sim = "robot_sim.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: integration tests that run full simulations"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robot_sim"]

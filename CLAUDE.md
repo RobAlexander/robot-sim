@@ -35,6 +35,9 @@ py -3 -m robot_sim.cli new-job 10 --normal-counts
 # Hillclimbing search for worst-case entity configuration, then run n times
 py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
 
+# Genetic algorithm search for worst-case entity placements, then run n times
+py -3 -m robot_sim.cli new-job 10 --search genetic --silent
+
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
 
@@ -50,7 +53,15 @@ py -3 -m robot_sim.cli rerun 3 --speed 4.0
 py -3 -m robot_sim.cli gui
 ```
 
-No test framework is set up yet. Smoke-test with:
+Install and run tests:
+
+```bash
+py -3 -m pip install -e ".[test]"
+py -3 -m pytest tests/ -v                   # all tests
+py -3 -m pytest tests/ -v -m "not slow"     # skip slow integration tests
+```
+
+Smoke-test (must also pass):
 
 ```bash
 py -3 -m robot_sim.cli new-job 1 --silent    # must complete without errors
@@ -162,13 +173,16 @@ from a normal distribution instead (μ = midpoint of range, σ = range/6, clampe
    Audio is also suppressed automatically when `PYTEST_CURRENT_TEST` is set or
    `pytest` is present in `sys.modules`, so test runs are always silent.
 
-10. **Situation generators** – `new-job` accepts `--search random` (default) or
-    `--search hillclimbing`. The hillclimbing generator (`generators.py`) performs a
-    coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space,
-    maximising total safety violations. Each step evaluates the current configuration
-    and all ±1 neighbours using the **same shared set of seeds** (`k_eval=3` by
-    default), so seed noise cancels out and only entity-count differences drive the
-    score comparison. After convergence the best configuration is used for all `n` runs.
+10. **Situation generators** – `new-job` accepts `--search random` (default),
+    `--search hillclimbing`, or `--search genetic`. All generators produce a list of
+    `Situation` objects that carry an `entity_list` (pinned x/y positions) or count
+    overrides; `_build_world` applies these and draws only the robot/litter positions
+    from the per-run seed.
+    - **hillclimbing** – coordinate-ascent over `(num_people, num_hedgehogs, num_trees)`;
+      evaluates current + ±1 neighbours with the same shared seeds per step.
+    - **genetic** – DEAP-powered GA over entity *placements* at midpoint counts; pop=20,
+      blend crossover, Gaussian mutation, elitism; `_decode_genome` converts flat
+      `[x0,y0,x1,y1,...]` + type list to `entity_list` tuples.
 
 ## Paths
 

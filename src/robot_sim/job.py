@@ -23,6 +23,7 @@ class RunRecord:
     violations: list[dict[str, Any]] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     explicit_counts: dict[str, int] | None = None  # set for hillclimbing runs
+    entity_list: list | None = None                # set for placement hillclimbing runs
 
     def add_violations(self, violations: list[Violation]) -> None:
         self.violations = [
@@ -47,6 +48,7 @@ class RunRecord:
         rec.violations = d.get("violations", [])
         rec.counts = d.get("counts", {})
         rec.explicit_counts = d.get("explicit_counts", None)
+        rec.entity_list = d.get("entity_list", None)
         return rec
 
 

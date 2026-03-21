@@ -35,6 +35,7 @@ def run_simulation(
         num_people=getattr(situation, 'num_people', None),
         num_hedgehogs=getattr(situation, 'num_hedgehogs', None),
         num_trees=getattr(situation, 'num_trees', None),
+        entity_list=getattr(situation, 'entity_list', None),
     )
     wall_start = time.perf_counter()
 

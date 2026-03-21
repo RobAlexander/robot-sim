@@ -179,16 +179,29 @@ class _App(ShowBase):
 
 class PandaRenderer(Renderer):
 
-    def __init__(self, world_seed: int, num_trees: int | None = None) -> None:
+    def __init__(self, world_seed: int, num_trees: int | None = None,
+                 entity_list: list | None = None) -> None:
         self._app = _App()
         self._hmap = generate_heightmap(
             world_seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT
         )
         self._paths = generate_paths(world_seed, WORLD_WIDTH, WORLD_DEPTH, NUM_PATHS)
 
-        self._veg_trees, self._veg_bushes = generate_vegetation(
-            world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths, num_trees=num_trees,
-        )
+        if entity_list is not None:
+            from ..sim.vegetation import Tree, Bush
+            from ..constants import TREE_RADIUS, BUSH_RADIUS
+            self._veg_trees = [
+                Tree(id=i, x=x, y=y, radius=TREE_RADIUS)
+                for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'tree')
+            ]
+            self._veg_bushes = [
+                Bush(id=i, x=x, y=y, radius=BUSH_RADIUS)
+                for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'bush')
+            ]
+        else:
+            self._veg_trees, self._veg_bushes = generate_vegetation(
+                world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths, num_trees=num_trees,
+            )
 
         self._setup_lights()
         self._setup_terrain()

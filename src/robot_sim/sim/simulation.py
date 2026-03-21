@@ -15,6 +15,7 @@ from ..constants import (
     AVOIDANCE_DISTANCE,
     NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX, HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL,
     LITTER_PATH_BIAS,
+    TREE_RADIUS, BUSH_RADIUS,
     NavMode,
 )
 from .terrain import generate_heightmap, sample_height
@@ -23,7 +24,7 @@ from .people import Person
 from .litter import Litter
 from .hedgehog import Hedgehog
 from .paths import generate_paths, sample_near_path
-from .vegetation import generate_vegetation
+from .vegetation import generate_vegetation, Tree, Bush
 from .world import World
 from .physics import apply_physics
 from .safety import check_violations, Violation
@@ -65,6 +66,7 @@ def _build_world(
     num_people: int | None = None,
     num_hedgehogs: int | None = None,
     num_trees: int | None = None,
+    entity_list: list[tuple[str, float, float]] | None = None,
 ) -> tuple[World, random.Random]:
     rng = random.Random(seed)
 
@@ -73,33 +75,48 @@ def _build_world(
     # Paths are generated from a dedicated stream; never touch main rng
     paths = generate_paths(seed, WORLD_WIDTH, WORLD_DEPTH)
 
-    # Draw variable counts from main RNG (must be done before any spawns).
-    # When an explicit count is provided, skip the RNG draw entirely.
-    if num_people is None:
-        if normal_counts:
-            num_people = _normal_int(rng, NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
-        else:
-            num_people = rng.randint(NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
-    if num_hedgehogs is None:
-        if normal_counts:
-            num_hedgehogs = _normal_int(rng, NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
-        else:
-            num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
+    if entity_list is not None:
+        # Derive counts from explicit list; skip all RNG count draws
+        num_people    = sum(1 for t, _, _ in entity_list if t == 'person')
+        num_hedgehogs = sum(1 for t, _, _ in entity_list if t == 'hedgehog')
+    else:
+        # Draw variable counts from main RNG (must be done before any spawns).
+        # When an explicit count is provided, skip the RNG draw entirely.
+        if num_people is None:
+            if normal_counts:
+                num_people = _normal_int(rng, NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+            else:
+                num_people = rng.randint(NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+        if num_hedgehogs is None:
+            if normal_counts:
+                num_hedgehogs = _normal_int(rng, NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
+            else:
+                num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
 
-    # Place robot away from edges
+    # Place robot away from edges (always from main RNG)
     margin = 5.0
     robot = Robot(
         x=rng.uniform(margin, WORLD_WIDTH - margin),
         y=rng.uniform(margin, WORLD_DEPTH - margin),
     )
 
-    people: list[Person] = []
-    for pid in range(num_people):
-        px, py = sample_near_path(rng, paths, WORLD_WIDTH, WORLD_DEPTH, spread=0.8)
-        p = Person(id=pid, x=px, y=py)
-        p.init_rng(random.Random(seed + pid + 1), paths=paths,
-                   world_width=WORLD_WIDTH, world_depth=WORLD_DEPTH)
-        people.append(p)
+    if entity_list is not None:
+        people: list[Person] = []
+        for pid, (_, px, py) in enumerate(
+            (e for e in entity_list if e[0] == 'person')
+        ):
+            p = Person(id=pid, x=px, y=py)
+            p.init_rng(random.Random(seed + pid + 1), paths=paths,
+                       world_width=WORLD_WIDTH, world_depth=WORLD_DEPTH)
+            people.append(p)
+    else:
+        people = []
+        for pid in range(num_people):
+            px, py = sample_near_path(rng, paths, WORLD_WIDTH, WORLD_DEPTH, spread=0.8)
+            p = Person(id=pid, x=px, y=py)
+            p.init_rng(random.Random(seed + pid + 1), paths=paths,
+                       world_width=WORLD_WIDTH, world_depth=WORLD_DEPTH)
+            people.append(p)
 
     litter: list[Litter] = []
     for lid in range(NUM_LITTER):
@@ -110,16 +127,34 @@ def _build_world(
             ly = rng.uniform(0.5, WORLD_DEPTH - 0.5)
         litter.append(Litter(id=lid, x=lx, y=ly))
 
-    hedgehogs: list[Hedgehog] = []
-    for hid in range(num_hedgehogs):
-        hog = Hedgehog(x=rng.uniform(5, WORLD_WIDTH - 5), y=rng.uniform(5, WORLD_DEPTH - 5))
-        hog.init_rng(random.Random(seed + 2000 + hid))
-        hedgehogs.append(hog)
+    if entity_list is not None:
+        hedgehogs: list[Hedgehog] = []
+        for hid, (_, hx, hy) in enumerate(
+            (e for e in entity_list if e[0] == 'hedgehog')
+        ):
+            hog = Hedgehog(x=hx, y=hy)
+            hog.init_rng(random.Random(seed + 2000 + hid))
+            hedgehogs.append(hog)
 
-    trees, bushes = generate_vegetation(
-        seed, WORLD_WIDTH, WORLD_DEPTH, paths,
-        normal_counts=normal_counts, num_trees=num_trees,
-    )
+        trees = [
+            Tree(id=i, x=x, y=y, radius=TREE_RADIUS)
+            for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'tree')
+        ]
+        bushes = [
+            Bush(id=i, x=x, y=y, radius=BUSH_RADIUS)
+            for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'bush')
+        ]
+    else:
+        hedgehogs = []
+        for hid in range(num_hedgehogs):
+            hog = Hedgehog(x=rng.uniform(5, WORLD_WIDTH - 5), y=rng.uniform(5, WORLD_DEPTH - 5))
+            hog.init_rng(random.Random(seed + 2000 + hid))
+            hedgehogs.append(hog)
+
+        trees, bushes = generate_vegetation(
+            seed, WORLD_WIDTH, WORLD_DEPTH, paths,
+            normal_counts=normal_counts, num_trees=num_trees,
+        )
 
     world = World(seed=seed, terrain=terrain, robot=robot, hedgehogs=hedgehogs,
                   paths=paths, people=people, litter=litter,
@@ -278,6 +313,7 @@ class Simulation:
         num_people: int | None = None,
         num_hedgehogs: int | None = None,
         num_trees: int | None = None,
+        entity_list: list[tuple[str, float, float]] | None = None,
     ) -> None:
         self.seed = seed
         self.step_count = 0
@@ -287,6 +323,7 @@ class Simulation:
             num_people=num_people,
             num_hedgehogs=num_hedgehogs,
             num_trees=num_trees,
+            entity_list=entity_list,
         )
         self.all_violations: list[Violation] = []
         self.nav_mode: NavMode = NavMode.ATTACK

@@ -22,15 +22,17 @@ from typing import Annotated, Optional
 
 import typer
 
-from .generators import HillclimbingGenerator, RandomGenerator, Situation
+from .generators import GeneticAlgorithmGenerator, HillclimbingGenerator, RandomGenerator, Situation
 from .job import Job, RunRecord, generate_seeds, save_job, load_job
 from .runner import run_simulation
 from .sim.safety import Violation
 
 
 class SearchMode(str, Enum):
-    random = "random"
+    random       = "random"
     hillclimbing = "hillclimbing"
+    placement    = "placement"
+    genetic      = "genetic"
 
 app = typer.Typer(add_completion=False, help="Autonomous robot litter-collection simulator")
 
@@ -56,14 +58,15 @@ def _violation_summary(violations: list[Violation]) -> str:
     return f"{len(violations)} violation(s)"
 
 
-def _make_visual_renderer(seed: int, num_trees: int | None = None):
+def _make_visual_renderer(seed: int, num_trees: int | None = None,
+                          entity_list: list | None = None):
     """Import and construct PandaRenderer only when a window is needed."""
     try:
         from .renderer.panda_renderer import PandaRenderer
     except ImportError as exc:
         typer.echo(f"[error] Cannot open visual renderer: {exc}", err=True)
         raise typer.Exit(1)
-    return PandaRenderer(world_seed=seed, num_trees=num_trees)
+    return PandaRenderer(world_seed=seed, num_trees=num_trees, entity_list=entity_list)
 
 
 def _make_null_renderer():
@@ -169,7 +172,7 @@ def new_job(
     )] = False,
     search: Annotated[SearchMode, typer.Option(
         "--search",
-        help="Situation generator strategy: 'random' (default) or 'hillclimbing'.",
+        help="Situation generator strategy: 'random' (default), 'hillclimbing' (optimise counts), 'placement' (optimise positions), or 'genetic' (GA over placements).",
     )] = SearchMode.random,
 ) -> None:
     """Run a headless batch of N simulations."""
@@ -182,6 +185,10 @@ def new_job(
     # Build situations via the chosen generator
     if search == SearchMode.hillclimbing:
         generator = HillclimbingGenerator(num_workers=num_workers)
+    elif search == SearchMode.placement:
+        generator = HillclimbingGenerator(num_workers=num_workers, placement_mode=True)
+    elif search == SearchMode.genetic:
+        generator = GeneticAlgorithmGenerator(num_workers=num_workers)
     else:
         generator = RandomGenerator(normal_counts=normal_counts)
 
@@ -200,7 +207,11 @@ def new_job(
                     "num_trees": sit.num_trees,
                 }.items() if v is not None
             }
-        rec = RunRecord(run_number=i, seed=sit.seed, explicit_counts=explicit)
+        rec = RunRecord(
+            run_number=i, seed=sit.seed,
+            explicit_counts=explicit,
+            entity_list=sit.entity_list,
+        )
         job.runs.append(rec)
     save_job(job)
 
@@ -250,12 +261,16 @@ def rerun(
 
     typer.echo(f"Replaying run {run_number}  seed={rec.seed}  speed={speed}x")
 
-    if rec.explicit_counts:
+    if rec.entity_list:
+        entity_list = [tuple(e) for e in rec.entity_list]
+        situation = Situation(seed=rec.seed, entity_list=entity_list)
+        renderer = _make_visual_renderer(rec.seed, entity_list=entity_list)
+    elif rec.explicit_counts:
         situation = Situation(seed=rec.seed, **rec.explicit_counts)
+        renderer = _make_visual_renderer(rec.seed, num_trees=situation.num_trees)
     else:
         situation = Situation(seed=rec.seed)
-
-    renderer = _make_visual_renderer(rec.seed, num_trees=situation.num_trees)
+        renderer = _make_visual_renderer(rec.seed)
     try:
         violations, _ = run_simulation(situation, renderer, speed_multiplier=speed)
     finally:
