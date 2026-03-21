@@ -22,6 +22,7 @@ class RunRecord:
     seed: int
     violations: list[dict[str, Any]] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
+    explicit_counts: dict[str, int] | None = None  # set for hillclimbing runs
 
     def add_violations(self, violations: list[Violation]) -> None:
         self.violations = [
@@ -45,6 +46,7 @@ class RunRecord:
         rec = cls(run_number=d["run_number"], seed=d["seed"])
         rec.violations = d.get("violations", [])
         rec.counts = d.get("counts", {})
+        rec.explicit_counts = d.get("explicit_counts", None)
         return rec
 
 

@@ -38,15 +38,18 @@ def generate_vegetation(
     world_depth: float,
     paths: _Paths,
     normal_counts: bool = False,
+    num_trees: int | None = None,
 ) -> tuple[list[Tree], list[Bush]]:
     """Return trees and bushes placed away from path centrelines.
 
     Tree count is drawn as the first RNG call so that both sim and renderer
     regenerate identical vegetation from the same seed without coupling to any
-    other RNG stream.
+    other RNG stream.  If num_trees is given explicitly the RNG draw is skipped.
     """
     rng = random.Random(seed + 3000)
-    if normal_counts:
+    if num_trees is not None:
+        pass  # use caller-supplied count; skip RNG draw so positions follow immediately
+    elif normal_counts:
         mu = (NUM_TREES_MIN + NUM_TREES_MAX) / 2
         sigma = (NUM_TREES_MAX - NUM_TREES_MIN) / 6
         num_trees = max(NUM_TREES_MIN, min(NUM_TREES_MAX, round(rng.gauss(mu, sigma))))

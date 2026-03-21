@@ -16,14 +16,21 @@ import random
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
 
+from .generators import HillclimbingGenerator, RandomGenerator, Situation
 from .job import Job, RunRecord, generate_seeds, save_job, load_job
 from .runner import run_simulation
 from .sim.safety import Violation
+
+
+class SearchMode(str, Enum):
+    random = "random"
+    hillclimbing = "hillclimbing"
 
 app = typer.Typer(add_completion=False, help="Autonomous robot litter-collection simulator")
 
@@ -38,6 +45,8 @@ def _print_summary(runs: list[RunRecord]) -> None:
         n_v = len(r.violations)
         flag = "!" if n_v else "ok"
         typer.echo(f"  Run {r.run_number:>3}  seed={r.seed}  violations={n_v}  {flag}")
+    avg = sum(len(r.violations) for r in runs) / len(runs) if runs else 0.0
+    typer.echo(f"  Average violations: {avg:.1f}")
     typer.echo("-----------------------------------------------------------------\n")
 
 
@@ -47,14 +56,14 @@ def _violation_summary(violations: list[Violation]) -> str:
     return f"{len(violations)} violation(s)"
 
 
-def _make_visual_renderer(seed: int):
+def _make_visual_renderer(seed: int, num_trees: int | None = None):
     """Import and construct PandaRenderer only when a window is needed."""
     try:
         from .renderer.panda_renderer import PandaRenderer
     except ImportError as exc:
         typer.echo(f"[error] Cannot open visual renderer: {exc}", err=True)
         raise typer.Exit(1)
-    return PandaRenderer(world_seed=seed)
+    return PandaRenderer(world_seed=seed, num_trees=num_trees)
 
 
 def _make_null_renderer():
@@ -109,9 +118,10 @@ def default(
     seed = random.SystemRandom().randint(0, 2**31 - 1)
     typer.echo(f"Starting visual run  seed={seed}  speed={speed}x")
 
+    situation = Situation(seed=seed)
     renderer = _make_visual_renderer(seed)
     try:
-        violations, counts = run_simulation(seed, renderer, speed_multiplier=speed)
+        violations, counts = run_simulation(situation, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 
@@ -130,12 +140,12 @@ def default(
 # Batch worker (module-level so pickle can serialise it for ProcessPoolExecutor)
 # ---------------------------------------------------------------------------
 
-def _batch_worker(seed: int, run_number: int, total: int, normal_counts: bool = False) -> tuple[int, list, dict]:
+def _batch_worker(situation: Situation, run_number: int, total: int, normal_counts: bool = False) -> tuple[int, list, dict]:
     """Executed in a child process for one headless simulation run."""
     renderer = _make_null_renderer()
-    violations, counts = run_simulation(seed, renderer, normal_counts=normal_counts)
+    violations, counts = run_simulation(situation, renderer, normal_counts=normal_counts)
     typer.echo(
-        f"  run {run_number}/{total}  seed={seed}  "
+        f"  run {run_number}/{total}  seed={situation.seed}  "
         f"{_violation_summary(violations)}"
     )
     return run_number, violations, counts
@@ -157,6 +167,10 @@ def new_job(
         "--normal-counts",
         help="Draw entity counts from a normal distribution (mean at midpoint, sigma=range/6) instead of uniform.",
     )] = False,
+    search: Annotated[SearchMode, typer.Option(
+        "--search",
+        help="Situation generator strategy: 'random' (default) or 'hillclimbing'.",
+    )] = SearchMode.random,
 ) -> None:
     """Run a headless batch of N simulations."""
     if n < 1:
@@ -165,19 +179,39 @@ def new_job(
 
     num_workers = workers if workers is not None else max(1, (os.cpu_count() or 2) // 2)
 
-    seeds = generate_seeds(n)
+    # Build situations via the chosen generator
+    if search == SearchMode.hillclimbing:
+        generator = HillclimbingGenerator(num_workers=num_workers)
+    else:
+        generator = RandomGenerator(normal_counts=normal_counts)
+
+    situations = generator.generate(n)
+
     job = Job()
 
     # Pre-generate and persist seeds immediately (before any run executes)
-    for i, s in enumerate(seeds, start=1):
-        job.runs.append(RunRecord(run_number=i, seed=s))
+    for i, sit in enumerate(situations, start=1):
+        explicit = None
+        if sit.num_people is not None or sit.num_hedgehogs is not None or sit.num_trees is not None:
+            explicit = {
+                k: v for k, v in {
+                    "num_people": sit.num_people,
+                    "num_hedgehogs": sit.num_hedgehogs,
+                    "num_trees": sit.num_trees,
+                }.items() if v is not None
+            }
+        rec = RunRecord(run_number=i, seed=sit.seed, explicit_counts=explicit)
+        job.runs.append(rec)
     save_job(job)
 
-    typer.echo(f"Starting headless job: {n} run(s)  workers={num_workers}")
+    typer.echo(f"Starting headless job: {n} run(s)  workers={num_workers}  search={search.value}")
 
     job_start = time.monotonic()
     with ProcessPoolExecutor(max_workers=num_workers) as pool:
-        futures = {pool.submit(_batch_worker, rec.seed, rec.run_number, n, normal_counts): rec for rec in job.runs}
+        futures = {
+            pool.submit(_batch_worker, sit, rec.run_number, n, normal_counts): rec
+            for sit, rec in zip(situations, job.runs)
+        }
         for future in as_completed(futures):
             run_number, violations, counts = future.result()
             rec = job.get_run(run_number)
@@ -216,9 +250,14 @@ def rerun(
 
     typer.echo(f"Replaying run {run_number}  seed={rec.seed}  speed={speed}x")
 
-    renderer = _make_visual_renderer(rec.seed)
+    if rec.explicit_counts:
+        situation = Situation(seed=rec.seed, **rec.explicit_counts)
+    else:
+        situation = Situation(seed=rec.seed)
+
+    renderer = _make_visual_renderer(rec.seed, num_trees=situation.num_trees)
     try:
-        violations, _ = run_simulation(rec.seed, renderer, speed_multiplier=speed)
+        violations, _ = run_simulation(situation, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 

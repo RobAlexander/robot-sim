@@ -32,6 +32,9 @@ py -3 -m robot_sim.cli new-job 10 --workers 4
 # Headless batch with normally-distributed entity counts
 py -3 -m robot_sim.cli new-job 10 --normal-counts
 
+# Hillclimbing search for worst-case entity configuration, then run n times
+py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
+
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
 
@@ -158,6 +161,14 @@ from a normal distribution instead (μ = midpoint of range, σ = range/6, clampe
 9. **Silent audio** – `new-job --silent` (or `-q`) suppresses the end-of-job tune.
    Audio is also suppressed automatically when `PYTEST_CURRENT_TEST` is set or
    `pytest` is present in `sys.modules`, so test runs are always silent.
+
+10. **Situation generators** – `new-job` accepts `--search random` (default) or
+    `--search hillclimbing`. The hillclimbing generator (`generators.py`) performs a
+    coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space,
+    maximising total safety violations. Each step evaluates the current configuration
+    and all ±1 neighbours using the **same shared set of seeds** (`k_eval=3` by
+    default), so seed noise cancels out and only entity-count differences drive the
+    score comparison. After convergence the best configuration is used for all `n` runs.
 
 ## Paths
 

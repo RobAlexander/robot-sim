@@ -17,6 +17,7 @@ A robot navigates a procedurally-generated outdoor terrain, collecting litter wh
 - **Safety violation detection** per step, with a 1 m clearance zone around people
 - **Deterministic multi-stream RNG** — identical seed → identical run, every time
 - **Headless batch mode** — parallel `ProcessPoolExecutor` workers; optional normal-distribution entity counts (`--normal-counts`)
+- **Hillclimbing situation search** — `--search hillclimbing` finds the entity configuration (people / hedgehogs / trees) that maximises safety violations, then runs the batch with that configuration
 - **PySide6 GUI run browser** — inspect jobs, sort violations, launch visual reruns
 - **Panda3D 3-D renderer** with orbit camera, safety-zone rings, and a togglable legend
 
@@ -68,6 +69,9 @@ py -3 -m robot_sim.cli new-job 10 --workers 4
 # Normally-distributed entity counts instead of uniform
 py -3 -m robot_sim.cli new-job 10 --normal-counts
 
+# Hillclimbing search for worst-case entity configuration, then run 10 times
+py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
+
 # Replay run 3 visually
 py -3 -m robot_sim.cli rerun 3
 
@@ -118,6 +122,12 @@ Variable counts are drawn from a uniform distribution by default. Pass `--normal
 ### Safety violations
 A violation is recorded whenever the robot's edge comes within 1 m of a person, makes physical contact with the hedgehog, or overlaps any vegetation. Violations are stored per-run in `~/.robot-sim/last_job.json` and can be reviewed in the GUI or with `list-violations`.
 
+### Situation generators
+`new-job` supports two strategies for choosing entity counts:
+
+- **`--search random`** (default) — counts are drawn independently per run from a uniform (or normal with `--normal-counts`) distribution.
+- **`--search hillclimbing`** — performs a coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space before the batch runs. Each hillclimbing step evaluates the current configuration and all ±1 neighbours using the **same shared seeds**, so only entity-count differences drive the score; seed noise cancels out. The worst-case configuration found is then used for all `n` runs in the batch.
+
 ---
 
 ## Project structure
@@ -126,6 +136,7 @@ A violation is recorded whenever the robot's edge comes within 1 m of a person, 
 src/robot_sim/
 ├── cli.py              # Typer CLI entry point
 ├── constants.py        # All magic numbers in one place
+├── generators.py       # Situation generators: random and hillclimbing search
 ├── job.py              # Batch orchestration + JSON persistence
 ├── runner.py           # Step loop, speed control, renderer relay
 ├── sim/

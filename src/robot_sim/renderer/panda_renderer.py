@@ -179,7 +179,7 @@ class _App(ShowBase):
 
 class PandaRenderer(Renderer):
 
-    def __init__(self, world_seed: int) -> None:
+    def __init__(self, world_seed: int, num_trees: int | None = None) -> None:
         self._app = _App()
         self._hmap = generate_heightmap(
             world_seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT
@@ -187,7 +187,7 @@ class PandaRenderer(Renderer):
         self._paths = generate_paths(world_seed, WORLD_WIDTH, WORLD_DEPTH, NUM_PATHS)
 
         self._veg_trees, self._veg_bushes = generate_vegetation(
-            world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths,
+            world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths, num_trees=num_trees,
         )
 
         self._setup_lights()

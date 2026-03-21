@@ -59,7 +59,13 @@ def _normal_int(rng: random.Random, lo: int, hi: int) -> int:
     return max(lo, min(hi, round(rng.gauss(mu, sigma))))
 
 
-def _build_world(seed: int, normal_counts: bool = False) -> tuple[World, random.Random]:
+def _build_world(
+    seed: int,
+    normal_counts: bool = False,
+    num_people: int | None = None,
+    num_hedgehogs: int | None = None,
+    num_trees: int | None = None,
+) -> tuple[World, random.Random]:
     rng = random.Random(seed)
 
     terrain = generate_heightmap(seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT)
@@ -67,13 +73,18 @@ def _build_world(seed: int, normal_counts: bool = False) -> tuple[World, random.
     # Paths are generated from a dedicated stream; never touch main rng
     paths = generate_paths(seed, WORLD_WIDTH, WORLD_DEPTH)
 
-    # Draw variable counts from main RNG (must be done before any spawns)
-    if normal_counts:
-        num_people = _normal_int(rng, NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
-        num_hedgehogs = _normal_int(rng, NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
-    else:
-        num_people = rng.randint(NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
-        num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
+    # Draw variable counts from main RNG (must be done before any spawns).
+    # When an explicit count is provided, skip the RNG draw entirely.
+    if num_people is None:
+        if normal_counts:
+            num_people = _normal_int(rng, NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+        else:
+            num_people = rng.randint(NUM_PEOPLE_MIN, NUM_PEOPLE_MAX)
+    if num_hedgehogs is None:
+        if normal_counts:
+            num_hedgehogs = _normal_int(rng, NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
+        else:
+            num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
 
     # Place robot away from edges
     margin = 5.0
@@ -105,7 +116,10 @@ def _build_world(seed: int, normal_counts: bool = False) -> tuple[World, random.
         hog.init_rng(random.Random(seed + 2000 + hid))
         hedgehogs.append(hog)
 
-    trees, bushes = generate_vegetation(seed, WORLD_WIDTH, WORLD_DEPTH, paths, normal_counts=normal_counts)
+    trees, bushes = generate_vegetation(
+        seed, WORLD_WIDTH, WORLD_DEPTH, paths,
+        normal_counts=normal_counts, num_trees=num_trees,
+    )
 
     world = World(seed=seed, terrain=terrain, robot=robot, hedgehogs=hedgehogs,
                   paths=paths, people=people, litter=litter,
@@ -257,10 +271,23 @@ def _collect_litter(world: World) -> list[int]:
 # ---------------------------------------------------------------------------
 
 class Simulation:
-    def __init__(self, seed: int, normal_counts: bool = False) -> None:
+    def __init__(
+        self,
+        seed: int,
+        normal_counts: bool = False,
+        num_people: int | None = None,
+        num_hedgehogs: int | None = None,
+        num_trees: int | None = None,
+    ) -> None:
         self.seed = seed
         self.step_count = 0
-        self.world, self._rng = _build_world(seed, normal_counts=normal_counts)
+        self.world, self._rng = _build_world(
+            seed,
+            normal_counts=normal_counts,
+            num_people=num_people,
+            num_hedgehogs=num_hedgehogs,
+            num_trees=num_trees,
+        )
         self.all_violations: list[Violation] = []
         self.nav_mode: NavMode = NavMode.ATTACK
 
