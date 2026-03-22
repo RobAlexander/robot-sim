@@ -71,6 +71,13 @@ PATH_ON_RADIUS: float        = 1.5   # m: person follows path direction when thi
 PATH_FOLLOW_PROB: float      = 0.78  # probability of path-influenced turn
 LITTER_PATH_BIAS: float      = 0.70  # fraction of litter items placed near paths
 
+# Attractors (crowd-density generators)
+NUM_ATTRACTORS_MIN: int = 0
+NUM_ATTRACTORS_MAX: int = 3
+ATTRACTOR_BLOCK_RADIUS: float = 0.8   # physical obstacle radius (metres)
+ATTRACTOR_ATTRACT_RADIUS: float = 3.0  # people aim within this distance of centre
+ATTRACTOR_DEST_PROB: float = 0.15     # probability person picks attractor as next destination
+
 # Terrain noise
 TERRAIN_SCALE: float = 0.08   # spatial frequency for pnoise2 (higher = rougher)
 TERRAIN_HEIGHT: float = 2.0   # max height variation in metres

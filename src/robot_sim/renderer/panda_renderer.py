@@ -44,6 +44,7 @@ from ..sim.simulation import StepResult
 from ..sim.terrain import generate_heightmap, sample_height
 from ..sim.paths import generate_paths
 from ..sim.vegetation import generate_vegetation
+from ..sim.attractor import generate_attractors
 from ..constants import (
     WORLD_WIDTH, WORLD_DEPTH,
     TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT,
@@ -180,12 +181,16 @@ class _App(ShowBase):
 class PandaRenderer(Renderer):
 
     def __init__(self, world_seed: int, num_trees: int | None = None,
-                 entity_list: list | None = None) -> None:
+                 entity_list: list | None = None, paths: list | None = None) -> None:
         self._app = _App()
         self._hmap = generate_heightmap(
             world_seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT
         )
-        self._paths = generate_paths(world_seed, WORLD_WIDTH, WORLD_DEPTH, NUM_PATHS)
+        # Use pinned paths if provided; otherwise generate from seed
+        if paths is not None:
+            self._paths = paths
+        else:
+            self._paths = generate_paths(world_seed, WORLD_WIDTH, WORLD_DEPTH, NUM_PATHS)
 
         if entity_list is not None:
             from ..sim.vegetation import Tree, Bush
@@ -203,10 +208,21 @@ class PandaRenderer(Renderer):
                 world_seed, WORLD_WIDTH, WORLD_DEPTH, self._paths, num_trees=num_trees,
             )
 
+        # Use attractor positions from entity_list if provided; otherwise generate from seed
+        if entity_list is not None:
+            from ..sim.attractor import Attractor
+            self._attractors = [
+                Attractor(id=i, x=x, y=y)
+                for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'attractor')
+            ]
+        else:
+            self._attractors = generate_attractors(world_seed, WORLD_WIDTH, WORLD_DEPTH)
+
         self._setup_lights()
         self._setup_terrain()
         self._setup_paths()
         self._setup_vegetation()
+        self._setup_attractors()
 
         # Orbit camera state
         self._pivot     = [WORLD_WIDTH / 2.0, WORLD_DEPTH / 2.0, TERRAIN_HEIGHT / 2.0]
@@ -318,6 +334,19 @@ class PandaRenderer(Renderer):
         self._sub(root, 1.60, 1.60, 0.90,  0.00,  0.00,  0.45,  0.14, 0.48, 0.10)  # main blob
         self._sub(root, 1.20, 1.00, 0.80,  0.35,  0.20,  0.40,  0.12, 0.44, 0.08)  # offset blob
         self._sub(root, 1.00, 1.20, 0.75, -0.30,  0.15,  0.38,  0.16, 0.50, 0.12)  # offset blob
+        return root
+
+    def _setup_attractors(self) -> None:
+        for attr in self._attractors:
+            z = sample_height(self._hmap, attr.x, attr.y, WORLD_WIDTH, WORLD_DEPTH)
+            self._build_fountain().setPos(attr.x, attr.y, z)
+
+    def _build_fountain(self) -> NodePath:
+        root = self._app.render.attachNewNode("attractor")
+        self._sub(root, 1.6, 1.6, 0.30,  0.0, 0.0, 0.15,  0.55, 0.55, 0.55)  # stone base
+        self._sub(root, 1.2, 1.2, 0.40,  0.0, 0.0, 0.50,  0.65, 0.75, 0.85)  # basin
+        self._sub(root, 0.9, 0.9, 0.05,  0.0, 0.0, 0.72,  0.20, 0.50, 0.90)  # water surface
+        self._sub(root, 0.2, 0.2, 0.60,  0.0, 0.0, 1.10,  0.55, 0.55, 0.55)  # central column
         return root
 
     def _setup_audio(self) -> None:
@@ -468,7 +497,7 @@ class PandaRenderer(Renderer):
         DirectFrame(
             parent=self._legend_root,
             frameColor=(0.04, 0.04, 0.04, 0.88),
-            frameSize=(-0.82, 0.82, -1.20, 0.67),
+            frameSize=(-0.82, 0.82, -1.40, 0.67),
             pos=(0, 0, 0),
         )
 
@@ -500,6 +529,7 @@ class PandaRenderer(Renderer):
             ((0.48, 0.34, 0.14), "Path     (people prefer these routes)"),
             ((0.38, 0.22, 0.08), "Tree     (hard obstacle; robot contact = violation)"),
             ((0.14, 0.48, 0.10), "Bush     (robot contact = violation; hedgehog may enter)"),
+            ((0.20, 0.50, 0.90), "Fountain (crowd attractor; robot contact = violation)"),
             ((0.14, 0.44, 0.09), "Terrain  (height varies with seed)"),
             ((1.00, 0.85, 0.00), "Safety zone circle (V to toggle; red = active violation)"),
         ]
@@ -569,7 +599,7 @@ class PandaRenderer(Renderer):
 
         # Fit legend within the screen.
         # aspect2d Y range is exactly -1..+1; our frame may extend below -1.
-        _L_BOTTOM, _L_TOP, _MARGIN = -1.20, 0.67, 0.03
+        _L_BOTTOM, _L_TOP, _MARGIN = -1.40, 0.67, 0.03
         height = _L_TOP - _L_BOTTOM
         avail  = 2.0 - 2 * _MARGIN
         scale  = min(1.0, avail / height)

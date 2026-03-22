@@ -11,6 +11,7 @@ from .people import Person
 from .litter import Litter
 from .hedgehog import Hedgehog
 from .vegetation import Tree, Bush
+from .attractor import Attractor
 
 
 @dataclass
@@ -24,3 +25,4 @@ class World:
     litter: list[Litter] = field(default_factory=list)
     trees: list[Tree] = field(default_factory=list)
     bushes: list[Bush] = field(default_factory=list)
+    attractors: list[Attractor] = field(default_factory=list)

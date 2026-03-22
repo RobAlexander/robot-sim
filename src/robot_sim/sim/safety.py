@@ -65,4 +65,13 @@ def check_violations(world: World, step: int) -> list[Violation]:
                 target=f"bush {b.id}",
             ))
 
+    for a in world.attractors:
+        edge_dist = math.hypot(r.x - a.x, r.y - a.y) - ROBOT_RADIUS - a.radius
+        if edge_dist < 0:
+            violations.append(Violation(
+                step=step, person_id=None, distance=edge_dist,
+                robot_x=r.x, robot_y=r.y, person_x=a.x, person_y=a.y,
+                target=f"attractor {a.id}",
+            ))
+
     return violations

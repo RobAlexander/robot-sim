@@ -35,6 +35,9 @@ py -3 -m robot_sim.cli new-job 10 --normal-counts
 # Hillclimbing search for worst-case entity configuration, then run n times
 py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
 
+# Hillclimbing search over entity placements (positions), then run n times
+py -3 -m robot_sim.cli new-job 10 --search placement --silent
+
 # Genetic algorithm search for worst-case entity placements, then run n times
 py -3 -m robot_sim.cli new-job 10 --search genetic --silent
 
@@ -125,6 +128,7 @@ robot-sim/
 | Person | 0–10 | Destination-seeking; prefers path waypoints; avoids vegetation; safety-critical |
 | Litter | 20 | 70% spawns near paths; disappears when collected |
 | Hedgehog | 0–2 | Erratic wanderer; ignores paths; may enter bushes |
+| Attractor (Fountain) | 0–3 | Static obstacle + crowd attractor; people aim nearby (15% dest prob); robot contact = violation |
 | Tree | 0–20 | Static hard obstacle; blocks robot, people, hedgehog; robot contact = violation |
 | Bush | 8 | Static obstacle; blocks robot and people; hedgehog may enter; robot contact = violation |
 
@@ -147,8 +151,13 @@ from a normal distribution instead (μ = midpoint of range, σ = range/6, clampe
    - Hedgehog `Random(seed + 2000)` – hedgehog wandering
    - Path stream `Random(seed + 5000)` – path generation (never touches main stream)
    - Vegetation stream `Random(seed + 3000)` – tree/bush placement (never touches main stream)
+   - Attractor stream `Random(seed + 6000)` – fountain placement (never touches main stream)
    - Terrain `OpenSimplex(seed=seed)` – heightmap
    - The renderer never writes to sim state (except nav_mode via runner).
+   - **Exception for placement/GA runs**: when a `Situation` carries pinned `paths` and
+     an `entity_list` that includes `'attractor'` entries, `_build_world` uses those
+     directly and skips the path and attractor seed streams entirely. This ensures the
+     search's optimised layout is reproduced faithfully in every job run.
 
 4. **Speed control** – `runner.py` computes `sleep = sim_elapsed/speed − wall_elapsed`.
    `NullRenderer.sleep_for_realtime()` is a no-op, so headless runs are unconstrained.
@@ -174,15 +183,22 @@ from a normal distribution instead (μ = midpoint of range, σ = range/6, clampe
    `pytest` is present in `sys.modules`, so test runs are always silent.
 
 10. **Situation generators** – `new-job` accepts `--search random` (default),
-    `--search hillclimbing`, or `--search genetic`. All generators produce a list of
-    `Situation` objects that carry an `entity_list` (pinned x/y positions) or count
-    overrides; `_build_world` applies these and draws only the robot/litter positions
-    from the per-run seed.
+    `--search hillclimbing`, `--search placement`, or `--search genetic`. All generators
+    produce a list of `Situation` objects that carry an `entity_list` (pinned x/y
+    positions) or count overrides; `_build_world` applies these and draws only the
+    litter positions from the per-run seed.
     - **hillclimbing** – coordinate-ascent over `(num_people, num_hedgehogs, num_trees)`;
       evaluates current + ±1 neighbours with the same shared seeds per step.
+    - **placement** – hillclimbing over entity x/y positions at midpoint counts;
+      includes people, hedgehogs, trees, bushes, attractors, and the robot.
     - **genetic** – DEAP-powered GA over entity *placements* at midpoint counts; pop=20,
       blend crossover, Gaussian mutation, elitism; `_decode_genome` converts flat
       `[x0,y0,x1,y1,...]` + type list to `entity_list` tuples.
+    - For `placement` and `genetic`: a single path layout is generated once at the
+      start of the search (from a system-random seed) and stored in `Situation.paths`.
+      Attractor positions are included in the genome/entity_list. Both are pinned for
+      all evaluations and all resulting job runs, so the search can optimise against
+      consistent navigation geometry.
 
 ## Paths
 
@@ -196,6 +212,11 @@ Paths are static polylines generated in `sim/paths.py` using a dedicated RNG str
 - **Hedgehog**: unaffected.
 - **Vegetation**: trees and bushes are placed at least 3 m from path centrelines.
 - **Renderer**: drawn as 4 px earthy-brown `LineSegs` hugging the terrain surface.
+
+For `--search placement` and `--search genetic`, a single path layout is generated
+once from a system-random seed at the start of the search, stored in `Situation.paths`,
+and used for all evaluations and all job runs. `_build_world` skips `generate_paths`
+when `paths` is provided. `PandaRenderer` also accepts explicit paths for visual reruns.
 
 ## Vegetation
 
@@ -277,6 +298,36 @@ sim_complete: bool
 
 Trees and bushes are static and not included in `StepResult`; the renderer
 regenerates them independently from `world_seed` (same as terrain and paths).
+
+## Possible Future Entities and Terrain Elements
+
+See `ontology-notes.md` for full details and ontology sources.
+
+Several well-maintained ontologies cover a park environment. The most relevant are
+**CityGML 3.0** (typed park furniture and vegetation), **ENVO** (environment/habitat
+classes including `urban park`, wildlife links), and **IEEE 1872.2** (robot autonomy
+and safety concepts). OpenStreetMap tags are a practical shorthand for any new entity.
+
+### Entity candidates
+| Entity | Notes |
+|---|---|
+| Waste bin | Static obstacle + litter deposit point; CityGML CityFurniture |
+| Bench | Static obstacle; people may path toward it; CityGML CityFurniture |
+| Lamp post / bollard | Narrow hard obstacle; CityGML CityFurniture |
+| Picnic table | Larger static obstacle; CityGML CityFurniture |
+| Fountain / pond | Area obstacle + ENVO water body |
+| Cyclist | Fast-moving person subtype; iCity Activity=Cycling |
+| Dog (off-lead) | Animal wanderer similar to hedgehog; ENVO/SUMO |
+| Bird / duck | Low-priority ambient wildlife; ENVO -> Aves |
+| Jogger / elderly / pram | Differentiated person subtypes with speed/turn profiles |
+
+### Terrain / environment candidates
+| Feature | Notes |
+|---|---|
+| Lawn vs. gravel vs. mud zones | Speed/friction modifiers; ATLAS terrain labels |
+| Pond / water body | Impassable area; CityGML WaterBody; ENVO `pond` |
+| Flowerbed / hedge strip | Dense vegetation zone; CityGML Vegetation ADE |
+| Woodland patch | Clustered trees with canopy; ENVO woodland sub-environment |
 
 ## Assets
 

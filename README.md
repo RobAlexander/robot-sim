@@ -18,7 +18,8 @@ A robot navigates a procedurally-generated outdoor terrain, collecting litter wh
 - **Deterministic multi-stream RNG** — identical seed → identical run, every time
 - **Headless batch mode** — parallel `ProcessPoolExecutor` workers; optional normal-distribution entity counts (`--normal-counts`)
 - **Hillclimbing situation search** — `--search hillclimbing` finds the entity configuration (people / hedgehogs / trees) that maximises safety violations, then runs the batch with that configuration
-- **Genetic algorithm situation search** — `--search genetic` optimises entity *placements* (x, y positions) via a DEAP-powered GA; maximises safety violations over multiple generations
+- **Placement hillclimbing** — `--search placement` hillclimbs over entity x/y positions (people, hedgehogs, trees, bushes, attractors, robot) at midpoint counts; pins a fixed path layout and attractor positions for the whole search
+- **Genetic algorithm situation search** — `--search genetic` optimises entity *placements* via a DEAP-powered GA; pins a fixed path layout and attractor positions so all evaluations use consistent navigation geometry; maximises safety violations over multiple generations
 - **PySide6 GUI run browser** — inspect jobs, sort violations, launch visual reruns
 - **Panda3D 3-D renderer** with orbit camera, safety-zone rings, and a togglable legend
 
@@ -73,6 +74,9 @@ py -3 -m robot_sim.cli new-job 10 --normal-counts
 # Hillclimbing search for worst-case entity configuration, then run 10 times
 py -3 -m robot_sim.cli new-job 10 --search hillclimbing --silent
 
+# Hillclimbing search over entity placements, then run 10 times
+py -3 -m robot_sim.cli new-job 10 --search placement --silent
+
 # Genetic algorithm search for worst-case entity placements, then run 10 times
 py -3 -m robot_sim.cli new-job 10 --search genetic --silent
 
@@ -108,7 +112,9 @@ py -3 -m robot_sim.cli gui
 ## How it works
 
 ### World generation
-Each run is seeded with a single integer. From that seed, five independent RNG streams produce the terrain heightmap, path network, entity spawn positions, pedestrian decisions, hedgehog wandering, and vegetation placement — in isolation, so changing one subsystem never perturbs another.
+Each run is seeded with a single integer. From that seed, independent RNG streams produce the terrain heightmap, path network, entity spawn positions, pedestrian decisions, hedgehog wandering, vegetation placement, and attractor positions — in isolation, so changing one subsystem never perturbs another.
+
+For placement and GA searches, a single path layout and attractor set are generated once at search start and pinned across all evaluations and job runs, so the optimiser sees consistent navigation geometry rather than seed-varying paths.
 
 ### Entities
 
@@ -118,6 +124,7 @@ Each run is seeded with a single integer. From that seed, five independent RNG s
 | Person | 0–10 | Picks path waypoints as destinations; steers around vegetation |
 | Litter | 20 | Static; 70 % spawned near paths |
 | Hedgehog | 0–2 | Erratic; ignores paths; may enter bushes |
+| Attractor | 0–3 | Static crowd-drawing fixture; people aim nearby 15 % of the time; robot contact = violation |
 | Tree | 0–20 | Hard obstacle for all entities |
 | Bush | 8 | Obstacle for robot and people; hedgehog may enter |
 
@@ -127,11 +134,12 @@ Variable counts are drawn from a uniform distribution by default. Pass `--normal
 A violation is recorded whenever the robot's edge comes within 1 m of a person, makes physical contact with the hedgehog, or overlaps any vegetation. Violations are stored per-run in `~/.robot-sim/last_job.json` and can be reviewed in the GUI or with `list-violations`.
 
 ### Situation generators
-`new-job` supports two strategies for choosing entity counts:
+`new-job` supports four strategies for choosing entity configurations:
 
 - **`--search random`** (default) — counts are drawn independently per run from a uniform (or normal with `--normal-counts`) distribution.
-- **`--search hillclimbing`** — performs a coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space before the batch runs. Each hillclimbing step evaluates the current configuration and all ±1 neighbours using the **same shared seeds**, so only entity-count differences drive the score; seed noise cancels out. The worst-case configuration found is then used for all `n` runs in the batch.
-- **`--search genetic`** — runs a genetic algorithm (via DEAP) over entity *placements* (x, y positions for every person, hedgehog, tree, and bush) at midpoint counts. Population size 20, blend crossover, Gaussian mutation, elitism. The best placement found is used for all `n` runs.
+- **`--search hillclimbing`** — performs a coordinate-ascent search over `(num_people, num_hedgehogs, num_trees)` space before the batch runs. Each step evaluates the current configuration and all ±1 neighbours using the **same shared seeds**, so only entity-count differences drive the score; seed noise cancels out. The worst-case configuration found is then used for all `n` runs.
+- **`--search placement`** — hillclimbs over entity x/y positions (people, hedgehogs, trees, bushes, attractors, robot) at midpoint counts. A single path layout is fixed for the whole search, and attractor positions are part of the optimised layout. The best placement is used for all `n` runs.
+- **`--search genetic`** — runs a genetic algorithm (via DEAP) over entity *placements* at midpoint counts. Like `placement`, a fixed path layout and attractor positions are pinned for all evaluations so the GA optimises against consistent navigation geometry. Population 20, blend crossover, Gaussian mutation, elitism. The best genome is used for all `n` runs.
 
 ---
 

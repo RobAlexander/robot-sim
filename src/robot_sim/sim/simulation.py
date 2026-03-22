@@ -25,6 +25,7 @@ from .litter import Litter
 from .hedgehog import Hedgehog
 from .paths import generate_paths, sample_near_path
 from .vegetation import generate_vegetation, Tree, Bush
+from .attractor import Attractor, generate_attractors
 from .world import World
 from .physics import apply_physics
 from .safety import check_violations, Violation
@@ -67,13 +68,24 @@ def _build_world(
     num_hedgehogs: int | None = None,
     num_trees: int | None = None,
     entity_list: list[tuple[str, float, float]] | None = None,
+    paths: list | None = None,
 ) -> tuple[World, random.Random]:
     rng = random.Random(seed)
 
     terrain = generate_heightmap(seed, TERRAIN_CELLS, TERRAIN_SCALE, TERRAIN_HEIGHT)
 
-    # Paths are generated from a dedicated stream; never touch main rng
-    paths = generate_paths(seed, WORLD_WIDTH, WORLD_DEPTH)
+    # Use pinned paths if provided; otherwise generate from seed's dedicated stream
+    if paths is None:
+        paths = generate_paths(seed, WORLD_WIDTH, WORLD_DEPTH)
+
+    # Use attractor positions from entity_list if provided; otherwise generate from seed
+    if entity_list is not None:
+        attractors = [
+            Attractor(id=i, x=x, y=y)
+            for i, (_, x, y) in enumerate(e for e in entity_list if e[0] == 'attractor')
+        ]
+    else:
+        attractors = generate_attractors(seed, WORLD_WIDTH, WORLD_DEPTH)
 
     if entity_list is not None:
         # Derive counts from explicit list; skip all RNG count draws
@@ -93,12 +105,16 @@ def _build_world(
             else:
                 num_hedgehogs = rng.randint(NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX)
 
-    # Place robot away from edges (always from main RNG)
-    margin = 5.0
-    robot = Robot(
-        x=rng.uniform(margin, WORLD_WIDTH - margin),
-        y=rng.uniform(margin, WORLD_DEPTH - margin),
-    )
+    # Place robot: use pinned position from entity_list if provided, else RNG
+    _robot_entry = next((e for e in (entity_list or []) if e[0] == 'robot'), None)
+    if _robot_entry is not None:
+        robot = Robot(x=_robot_entry[1], y=_robot_entry[2])
+    else:
+        margin = 5.0
+        robot = Robot(
+            x=rng.uniform(margin, WORLD_WIDTH - margin),
+            y=rng.uniform(margin, WORLD_DEPTH - margin),
+        )
 
     if entity_list is not None:
         people: list[Person] = []
@@ -107,6 +123,7 @@ def _build_world(
         ):
             p = Person(id=pid, x=px, y=py)
             p.init_rng(random.Random(seed + pid + 1), paths=paths,
+                       attractors=attractors,
                        world_width=WORLD_WIDTH, world_depth=WORLD_DEPTH)
             people.append(p)
     else:
@@ -115,6 +132,7 @@ def _build_world(
             px, py = sample_near_path(rng, paths, WORLD_WIDTH, WORLD_DEPTH, spread=0.8)
             p = Person(id=pid, x=px, y=py)
             p.init_rng(random.Random(seed + pid + 1), paths=paths,
+                       attractors=attractors,
                        world_width=WORLD_WIDTH, world_depth=WORLD_DEPTH)
             people.append(p)
 
@@ -158,7 +176,7 @@ def _build_world(
 
     world = World(seed=seed, terrain=terrain, robot=robot, hedgehogs=hedgehogs,
                   paths=paths, people=people, litter=litter,
-                  trees=trees, bushes=bushes)
+                  trees=trees, bushes=bushes, attractors=attractors)
     apply_physics(world)  # snap heights and push-back for initial positions
     return world, rng
 
@@ -314,6 +332,7 @@ class Simulation:
         num_hedgehogs: int | None = None,
         num_trees: int | None = None,
         entity_list: list[tuple[str, float, float]] | None = None,
+        paths: list | None = None,
     ) -> None:
         self.seed = seed
         self.step_count = 0
@@ -324,6 +343,7 @@ class Simulation:
             num_hedgehogs=num_hedgehogs,
             num_trees=num_trees,
             entity_list=entity_list,
+            paths=paths,
         )
         self.all_violations: list[Violation] = []
         self.nav_mode: NavMode = NavMode.ATTACK
@@ -355,7 +375,9 @@ class Simulation:
         for p in self._world.people:
             p.step(STEP_DT, WORLD_WIDTH, WORLD_DEPTH, PERSON_SPEED,
                    PERSON_TURN_RATE, PERSON_ARRIVE_RADIUS,
-                   paths=self._world.paths, obstacles=obstacles)
+                   paths=self._world.paths,
+                   attractors=self._world.attractors,
+                   obstacles=obstacles)
 
         for hog in self._world.hedgehogs:
             hog.step(STEP_DT, WORLD_WIDTH, WORLD_DEPTH, HEDGEHOG_SPEED, HEDGEHOG_TURN_INTERVAL)

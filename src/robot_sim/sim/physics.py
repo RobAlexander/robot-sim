@@ -38,18 +38,22 @@ def apply_physics(world: World) -> None:
     for p in world.people:
         r.x, r.y = _push_back_circle(r.x, r.y, ROBOT_RADIUS, p.x, p.y, PERSON_RADIUS)
 
-    # 3. Push robot away from trees and bushes
+    # 3. Push robot away from trees, bushes, and attractors
     for t in world.trees:
         r.x, r.y = _push_back_circle(r.x, r.y, ROBOT_RADIUS, t.x, t.y, t.radius)
     for b in world.bushes:
         r.x, r.y = _push_back_circle(r.x, r.y, ROBOT_RADIUS, b.x, b.y, b.radius)
+    for a in world.attractors:
+        r.x, r.y = _push_back_circle(r.x, r.y, ROBOT_RADIUS, a.x, a.y, a.radius)
 
-    # 4. Push people away from trees and bushes
+    # 4. Push people away from trees, bushes, and attractors
     for p in world.people:
         for t in world.trees:
             p.x, p.y = _push_back_circle(p.x, p.y, PERSON_RADIUS, t.x, t.y, t.radius)
         for b in world.bushes:
             p.x, p.y = _push_back_circle(p.x, p.y, PERSON_RADIUS, b.x, b.y, b.radius)
+        for a in world.attractors:
+            p.x, p.y = _push_back_circle(p.x, p.y, PERSON_RADIUS, a.x, a.y, a.radius)
 
     # 5. Push hedgehogs away from trees only (hedgehog may enter bushes)
     for hog in world.hedgehogs:
@@ -65,3 +69,5 @@ def apply_physics(world: World) -> None:
     for lit in world.litter:
         if not lit.collected:
             lit.z = sample_height(world.terrain, lit.x, lit.y, WORLD_WIDTH, WORLD_DEPTH)
+    for a in world.attractors:
+        a.z = sample_height(world.terrain, a.x, a.y, WORLD_WIDTH, WORLD_DEPTH)

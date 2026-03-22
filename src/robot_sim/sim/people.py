@@ -11,7 +11,10 @@ import math
 import random
 from dataclasses import dataclass
 
-from ..constants import PERSON_OBSTACLE_AVOID_DIST, PERSON_ARRIVE_RADIUS
+from ..constants import (
+    PERSON_OBSTACLE_AVOID_DIST, PERSON_ARRIVE_RADIUS,
+    ATTRACTOR_DEST_PROB, ATTRACTOR_ATTRACT_RADIUS,
+)
 from .paths import _Paths
 
 
@@ -41,20 +44,30 @@ class Person:
 
     def init_rng(self, rng: random.Random,
                  paths: _Paths | None = None,
+                 attractors: list | None = None,
                  world_width: float = 50.0,
                  world_depth: float = 50.0) -> None:
         self._rng = rng
         self.heading = rng.uniform(0, 2 * math.pi)
-        self._pick_destination(paths, world_width, world_depth)
+        self._pick_destination(paths, world_width, world_depth, attractors)
 
     # ------------------------------------------------------------------
     # Destination picking
     # ------------------------------------------------------------------
 
     def _pick_destination(self, paths: _Paths | None,
-                          world_width: float, world_depth: float) -> None:
-        """Choose next waypoint: 80% chance of a path waypoint, else random."""
-        if paths and self._rng.random() < 0.80:
+                          world_width: float, world_depth: float,
+                          attractors: list | None = None) -> None:
+        """Choose next waypoint: 15% attractor, 80% path waypoint, else random."""
+        if attractors and self._rng.random() < ATTRACTOR_DEST_PROB:
+            attr = attractors[self._rng.randrange(len(attractors))]
+            angle = self._rng.uniform(0, 2 * math.pi)
+            dist = self._rng.uniform(0.5, ATTRACTOR_ATTRACT_RADIUS)
+            self._dest_x = max(1.0, min(world_width - 1.0,
+                                        attr.x + math.cos(angle) * dist))
+            self._dest_y = max(1.0, min(world_depth - 1.0,
+                                        attr.y + math.sin(angle) * dist))
+        elif paths and self._rng.random() < 0.80:
             path = paths[self._rng.randrange(len(paths))]
             wp_x, wp_y = path[self._rng.randrange(len(path))]
             self._dest_x = max(1.0, min(world_width  - 1.0,
@@ -73,12 +86,13 @@ class Person:
     def step(self, dt: float, world_width: float, world_depth: float,
              speed: float, turn_rate: float, arrive_radius: float,
              paths: _Paths | None = None,
+             attractors: list | None = None,
              obstacles: list[tuple[float, float, float]] | None = None) -> None:
         """Advance person one sim step toward their current destination."""
         # Arrive / init
         if (not self._dest_set
                 or math.hypot(self.x - self._dest_x, self.y - self._dest_y) < arrive_radius):
-            self._pick_destination(paths, world_width, world_depth)
+            self._pick_destination(paths, world_width, world_depth, attractors)
 
         # Desired heading: toward destination
         desired = math.atan2(self._dest_y - self.y, self._dest_x - self.x)

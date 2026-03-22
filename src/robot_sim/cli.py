@@ -7,6 +7,8 @@ robot-sim                        single visual run with a random seed
 robot-sim new-job N              headless batch of N runs
 robot-sim rerun M                visual replay of run M from last job
 robot-sim list-violations [M]    list recorded violations (all runs, or run M)
+robot-sim plot-stats             plot entity-count distributions from last job
+robot-sim gui                    open the PySide6 run browser GUI
 """
 
 from __future__ import annotations
@@ -59,14 +61,15 @@ def _violation_summary(violations: list[Violation]) -> str:
 
 
 def _make_visual_renderer(seed: int, num_trees: int | None = None,
-                          entity_list: list | None = None):
+                          entity_list: list | None = None, paths: list | None = None):
     """Import and construct PandaRenderer only when a window is needed."""
     try:
         from .renderer.panda_renderer import PandaRenderer
     except ImportError as exc:
         typer.echo(f"[error] Cannot open visual renderer: {exc}", err=True)
         raise typer.Exit(1)
-    return PandaRenderer(world_seed=seed, num_trees=num_trees, entity_list=entity_list)
+    return PandaRenderer(world_seed=seed, num_trees=num_trees, entity_list=entity_list,
+                         paths=paths)
 
 
 def _make_null_renderer():
@@ -124,7 +127,7 @@ def default(
     situation = Situation(seed=seed)
     renderer = _make_visual_renderer(seed)
     try:
-        violations, counts = run_simulation(situation, renderer, speed_multiplier=speed)
+        violations, counts, _ = run_simulation(situation, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 
@@ -146,7 +149,7 @@ def default(
 def _batch_worker(situation: Situation, run_number: int, total: int, normal_counts: bool = False) -> tuple[int, list, dict]:
     """Executed in a child process for one headless simulation run."""
     renderer = _make_null_renderer()
-    violations, counts = run_simulation(situation, renderer, normal_counts=normal_counts)
+    violations, counts, _ = run_simulation(situation, renderer, normal_counts=normal_counts)
     typer.echo(
         f"  run {run_number}/{total}  seed={situation.seed}  "
         f"{_violation_summary(violations)}"
@@ -211,6 +214,7 @@ def new_job(
             run_number=i, seed=sit.seed,
             explicit_counts=explicit,
             entity_list=sit.entity_list,
+            paths=sit.paths,
         )
         job.runs.append(rec)
     save_job(job)
@@ -263,8 +267,9 @@ def rerun(
 
     if rec.entity_list:
         entity_list = [tuple(e) for e in rec.entity_list]
-        situation = Situation(seed=rec.seed, entity_list=entity_list)
-        renderer = _make_visual_renderer(rec.seed, entity_list=entity_list)
+        paths = rec.paths  # may be None for old saved jobs
+        situation = Situation(seed=rec.seed, entity_list=entity_list, paths=paths)
+        renderer = _make_visual_renderer(rec.seed, entity_list=entity_list, paths=paths)
     elif rec.explicit_counts:
         situation = Situation(seed=rec.seed, **rec.explicit_counts)
         renderer = _make_visual_renderer(rec.seed, num_trees=situation.num_trees)
@@ -272,7 +277,7 @@ def rerun(
         situation = Situation(seed=rec.seed)
         renderer = _make_visual_renderer(rec.seed)
     try:
-        violations, _ = run_simulation(situation, renderer, speed_multiplier=speed)
+        violations, _, _ = run_simulation(situation, renderer, speed_multiplier=speed)
     finally:
         renderer.shutdown()
 

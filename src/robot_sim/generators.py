@@ -12,9 +12,38 @@ from .constants import (
     NUM_HEDGEHOGS_MIN, NUM_HEDGEHOGS_MAX,
     NUM_PEOPLE_MIN, NUM_PEOPLE_MAX,
     NUM_TREES_MIN, NUM_TREES_MAX,
+    NUM_ATTRACTORS_MIN, NUM_ATTRACTORS_MAX,
     NUM_BUSHES, WORLD_WIDTH, WORLD_DEPTH,
 )
 from .job import generate_seeds
+
+
+# Scaling factor applied to raw violation counts in FitnessScore.total.
+# Proximity accumulates continuously (~75 000 per run at typical entity density)
+# while violations are discrete events (~200 per run in worst-case).  A weight
+# of ~375 brings them to roughly equal contribution.  Adjust if the ratio of
+# typical proximity to typical violations changes significantly.
+VIOLATION_WEIGHT: float = 375.0
+
+
+@dataclass
+class FitnessScore:
+    """Combined fitness used by all search strategies.
+
+    ``violations`` is the raw safety-violation count; ``proximity`` is the
+    accumulated per-step proximity score (see runner._step_proximity).
+    ``total`` is the value used for ranking — higher is worse for the robot.
+    """
+    violations: int
+    proximity: float
+
+    def __add__(self, other: FitnessScore) -> FitnessScore:
+        return FitnessScore(self.violations + other.violations,
+                            self.proximity + other.proximity)
+
+    @property
+    def total(self) -> float:
+        return self.violations * VIOLATION_WEIGHT + self.proximity
 
 
 @dataclass
@@ -24,6 +53,7 @@ class Situation:
     num_hedgehogs: int | None = None
     num_trees: int | None = None
     entity_list: list[tuple[str, float, float]] | None = None
+    paths: list | None = None  # pinned path layout; list[list[tuple[float,float]]]
 
 
 # ---------------------------------------------------------------------------
@@ -53,19 +83,19 @@ class RandomGenerator(SituationGenerator):
 # Hillclimbing evaluation worker (module-level so pickle works on Windows)
 # ---------------------------------------------------------------------------
 
-def _eval_worker_placed(seed: int, entity_list: list) -> int:
-    """Run one headless sim with an explicit entity_list; return violation count."""
+def _eval_worker_placed(seed: int, entity_list: list, paths: list | None = None) -> FitnessScore:
+    """Run one headless sim with an explicit entity_list; return FitnessScore."""
     from .runner import run_simulation
     from .renderer.null_renderer import NullRenderer
 
-    situation = Situation(seed=seed, entity_list=entity_list)
+    situation = Situation(seed=seed, entity_list=entity_list, paths=paths)
     renderer = NullRenderer()
-    violations, _ = run_simulation(situation, renderer)
-    return len(violations)
+    violations, _, proximity = run_simulation(situation, renderer)
+    return FitnessScore(len(violations), proximity)
 
 
-def _eval_worker(seed: int, num_people: int, num_hedgehogs: int, num_trees: int) -> int:
-    """Run one headless sim with explicit counts; return violation count."""
+def _eval_worker(seed: int, num_people: int, num_hedgehogs: int, num_trees: int) -> FitnessScore:
+    """Run one headless sim with explicit counts; return FitnessScore."""
     from .runner import run_simulation
     from .renderer.null_renderer import NullRenderer
 
@@ -76,8 +106,8 @@ def _eval_worker(seed: int, num_people: int, num_hedgehogs: int, num_trees: int)
         num_trees=num_trees,
     )
     renderer = NullRenderer()
-    violations, _ = run_simulation(situation, renderer)
-    return len(violations)
+    violations, _, proximity = run_simulation(situation, renderer)
+    return FitnessScore(len(violations), proximity)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +132,10 @@ class HillclimbingGenerator(SituationGenerator):
     def generate(self, n: int) -> list[Situation]:
         if self.placement_mode:
             result = self._search_placement(n)
-            return [Situation(seed=s, entity_list=result["entity_list"]) for s in generate_seeds(n)]
+            return [
+                Situation(seed=s, entity_list=result["entity_list"], paths=result["paths"])
+                for s in generate_seeds(n)
+            ]
         best_counts = self._search(n)
         seeds = generate_seeds(n)
         return [Situation(seed=s, **best_counts) for s in seeds]
@@ -159,7 +192,7 @@ class HillclimbingGenerator(SituationGenerator):
                     for idx, c in enumerate(all_candidates)
                 }
                 cand_scores = {
-                    idx: sum(f.result() for f in futs)
+                    idx: sum((f.result() for f in futs), FitnessScore(0, 0.0))
                     for idx, futs in cand_futures.items()
                 }
 
@@ -169,13 +202,14 @@ class HillclimbingGenerator(SituationGenerator):
                 if step == 1:
                     typer.echo(
                         f"Hillclimbing: start  (people={cur[0]}, hedgehogs={cur[1]},"
-                        f" trees={cur[2]})  eval={cur_score} violations"
+                        f" trees={cur[2]})  violations={cur_score.violations}"
+                        f"  fitness={cur_score.total:.1f}"
                     )
 
-                best_nb_idx = max(nb_scores, key=lambda k: nb_scores[k])
+                best_nb_idx = max(nb_scores, key=lambda k: nb_scores[k].total)
                 best_nb_score = nb_scores[best_nb_idx]
 
-                if best_nb_score <= cur_score:
+                if best_nb_score.total <= cur_score.total:
                     typer.echo(
                         f"Hillclimbing: converged at (people={cur[0]}, hedgehogs={cur[1]},"
                         f" trees={cur[2]}) after {step - 1} steps"
@@ -186,7 +220,8 @@ class HillclimbingGenerator(SituationGenerator):
                 cur_score = best_nb_score
                 typer.echo(
                     f"Hillclimbing: step {step} (people={cur[0]}, hedgehogs={cur[1]},"
-                    f" trees={cur[2]})  eval={cur_score} violations"
+                    f" trees={cur[2]})  violations={cur_score.violations}"
+                    f"  fitness={cur_score.total:.1f}"
                 )
             else:
                 typer.echo(
@@ -203,6 +238,7 @@ class HillclimbingGenerator(SituationGenerator):
 
     def _search_placement(self, n: int) -> dict:
         import typer
+        from .sim.paths import generate_paths as _gen_paths
 
         num_workers = self.num_workers or max(1, (os.cpu_count() or 2) // 2)
         srng = random.SystemRandom()
@@ -214,15 +250,21 @@ class HillclimbingGenerator(SituationGenerator):
         n_hedgehogs = (NUM_HEDGEHOGS_MIN + NUM_HEDGEHOGS_MAX) // 2
         n_trees     = (NUM_TREES_MIN     + NUM_TREES_MAX)     // 2
         n_bushes    = NUM_BUSHES
+        n_attractors = (NUM_ATTRACTORS_MIN + NUM_ATTRACTORS_MAX) // 2
+
+        # Fix one path layout for the entire search so evaluations are comparable
+        search_paths = _gen_paths(srng.randint(0, 2**31 - 1), W, D)
 
         def rp() -> tuple[float, float]:
             return (srng.uniform(margin, W - margin), srng.uniform(margin, D - margin))
 
         cur: list[tuple[str, float, float]] = (
-            [('person',   *rp()) for _ in range(n_people)]
-          + [('hedgehog', *rp()) for _ in range(n_hedgehogs)]
-          + [('tree',     *rp()) for _ in range(n_trees)]
-          + [('bush',     *rp()) for _ in range(n_bushes)]
+            [('person',    *rp()) for _ in range(n_people)]
+          + [('hedgehog',  *rp()) for _ in range(n_hedgehogs)]
+          + [('tree',      *rp()) for _ in range(n_trees)]
+          + [('bush',      *rp()) for _ in range(n_bushes)]
+          + [('attractor', *rp()) for _ in range(n_attractors)]
+          + [('robot',     *rp())]
         )
         cur_score: int | None = None
 
@@ -254,11 +296,11 @@ class HillclimbingGenerator(SituationGenerator):
                 step_seeds = [srng.randint(0, 2**31 - 1) for _ in range(self.k_eval)]
                 all_candidates = [cur] + neighbours
                 cand_futures = {
-                    cidx: [pool.submit(_eval_worker_placed, s, c) for s in step_seeds]
+                    cidx: [pool.submit(_eval_worker_placed, s, c, search_paths) for s in step_seeds]
                     for cidx, c in enumerate(all_candidates)
                 }
                 cand_scores = {
-                    cidx: sum(f.result() for f in futs)
+                    cidx: sum((f.result() for f in futs), FitnessScore(0, 0.0))
                     for cidx, futs in cand_futures.items()
                 }
 
@@ -269,14 +311,14 @@ class HillclimbingGenerator(SituationGenerator):
                     typer.echo(
                         f"Hillclimbing (placement): start"
                         f"  people={n_people}, hedgehogs={n_hedgehogs},"
-                        f" trees={n_trees}, bushes={n_bushes}"
-                        f"  eval={cur_score} violations"
+                        f" trees={n_trees}, bushes={n_bushes}, attractors={n_attractors}"
+                        f"  violations={cur_score.violations}  fitness={cur_score.total:.1f}"
                     )
 
-                best_nb_idx   = max(nb_scores, key=lambda k: nb_scores[k])
+                best_nb_idx   = max(nb_scores, key=lambda k: nb_scores[k].total)
                 best_nb_score = nb_scores[best_nb_idx]
 
-                if best_nb_score <= cur_score:
+                if best_nb_score.total <= cur_score.total:
                     typer.echo(
                         f"Hillclimbing (placement): converged after {step - 1} steps"
                     )
@@ -284,12 +326,15 @@ class HillclimbingGenerator(SituationGenerator):
 
                 cur       = neighbours[best_nb_idx]
                 cur_score = best_nb_score
-                typer.echo(f"Hillclimbing (placement): step {step}  eval={cur_score} violations")
+                typer.echo(
+                    f"Hillclimbing (placement): step {step}"
+                    f"  violations={cur_score.violations}  fitness={cur_score.total:.1f}"
+                )
             else:
                 typer.echo("Hillclimbing (placement): max steps reached")
 
         typer.echo(f"Generating {n} run(s) with best placement configuration...")
-        return {"entity_list": cur}
+        return {"entity_list": cur, "paths": search_paths}
 
 
 # ---------------------------------------------------------------------------
@@ -304,11 +349,11 @@ def _decode_genome(
     return [(t, genome[i * 2], genome[i * 2 + 1]) for i, t in enumerate(entity_types)]
 
 
-def _ga_eval_worker(args: tuple) -> int:
-    """Evaluate one genome (args = (genome, seeds, entity_types)); return total violations."""
-    genome, seeds, entity_types = args
+def _ga_eval_worker(args: tuple) -> FitnessScore:
+    """Evaluate one genome (args = (genome, seeds, entity_types, paths)); return FitnessScore."""
+    genome, seeds, entity_types, paths = args
     entity_list = _decode_genome(genome, entity_types)
-    return sum(_eval_worker_placed(s, entity_list) for s in seeds)
+    return sum((_eval_worker_placed(s, entity_list, paths) for s in seeds), FitnessScore(0, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -333,27 +378,37 @@ class GeneticAlgorithmGenerator(SituationGenerator):
 
     def generate(self, n: int) -> list[Situation]:
         result = self._search_ga(n)
-        return [Situation(seed=s, entity_list=result["entity_list"]) for s in generate_seeds(n)]
+        return [
+            Situation(seed=s, entity_list=result["entity_list"], paths=result.get("paths"))
+            for s in generate_seeds(n)
+        ]
 
     def _search_ga(self, n: int) -> dict:
         import typer
         from deap import tools
+        from .sim.paths import generate_paths as _gen_paths
 
         num_workers = self.num_workers or max(1, (os.cpu_count() or 2) // 2)
         srng = random.SystemRandom()
         margin = self._MARGIN
         W, D = WORLD_WIDTH, WORLD_DEPTH
 
-        n_people    = (NUM_PEOPLE_MIN    + NUM_PEOPLE_MAX)    // 2
-        n_hedgehogs = (NUM_HEDGEHOGS_MIN + NUM_HEDGEHOGS_MAX) // 2
-        n_trees     = (NUM_TREES_MIN     + NUM_TREES_MAX)     // 2
-        n_bushes    = NUM_BUSHES
+        n_people     = (NUM_PEOPLE_MIN     + NUM_PEOPLE_MAX)     // 2
+        n_hedgehogs  = (NUM_HEDGEHOGS_MIN  + NUM_HEDGEHOGS_MAX)  // 2
+        n_trees      = (NUM_TREES_MIN      + NUM_TREES_MAX)      // 2
+        n_bushes     = NUM_BUSHES
+        n_attractors = (NUM_ATTRACTORS_MIN + NUM_ATTRACTORS_MAX) // 2
+
+        # Fix one path layout for the entire search so evaluations are comparable
+        search_paths = _gen_paths(srng.randint(0, 2**31 - 1), W, D)
 
         entity_types: list[str] = (
-            ['person']   * n_people +
-            ['hedgehog'] * n_hedgehogs +
-            ['tree']     * n_trees +
-            ['bush']     * n_bushes
+            ['person']    * n_people +
+            ['hedgehog']  * n_hedgehogs +
+            ['tree']      * n_trees +
+            ['bush']      * n_bushes +
+            ['attractor'] * n_attractors +
+            ['robot']
         )
         n_genes = len(entity_types) * 2
 
@@ -370,11 +425,11 @@ class GeneticAlgorithmGenerator(SituationGenerator):
 
         population: list[list[float]] = [_rand_genome() for _ in range(self._POP_SIZE)]
         best_genome: list[float] = population[0][:]
-        best_score: int = 0
+        best_score = FitnessScore(0, 0.0)
 
         typer.echo(
             f"GA: start  people={n_people}, hedgehogs={n_hedgehogs},"
-            f" trees={n_trees}, bushes={n_bushes}"
+            f" trees={n_trees}, bushes={n_bushes}, attractors={n_attractors}"
             f"  pop={self._POP_SIZE}  generations={self.max_steps}"
         )
 
@@ -382,20 +437,24 @@ class GeneticAlgorithmGenerator(SituationGenerator):
             for gen in range(1, self.max_steps + 1):
                 step_seeds = [srng.randint(0, 2**31 - 1) for _ in range(self.k_eval)]
 
-                eval_args = [(g, step_seeds, entity_types) for g in population]
-                fitnesses: list[int] = list(pool.map(_ga_eval_worker, eval_args))
+                eval_args = [(g, step_seeds, entity_types, search_paths) for g in population]
+                fitnesses: list[FitnessScore] = list(pool.map(_ga_eval_worker, eval_args))
 
-                gen_best = max(fitnesses)
-                if gen_best > best_score:
+                gen_best = max(fitnesses, key=lambda f: f.total)
+                if gen_best.total > best_score.total:
                     best_score = gen_best
                     best_genome = population[fitnesses.index(gen_best)][:]
 
-                typer.echo(f"GA: gen {gen}/{self.max_steps}  best={best_score}  gen_best={gen_best}")
+                typer.echo(
+                    f"GA: gen {gen}/{self.max_steps}"
+                    f"  best={best_score.violations}v/{best_score.total:.1f}f"
+                    f"  gen_best={gen_best.violations}v/{gen_best.total:.1f}f"
+                )
 
                 # Tournament selection
-                def _tournament(fitnesses: list[int] = fitnesses) -> list[float]:
+                def _tournament(fitnesses: list[FitnessScore] = fitnesses) -> list[float]:
                     contenders = random.sample(range(self._POP_SIZE), self._TOURNSIZE)
-                    winner = max(contenders, key=lambda i: fitnesses[i])
+                    winner = max(contenders, key=lambda i: fitnesses[i].total)
                     return population[winner][:]
 
                 offspring = [_tournament() for _ in range(self._POP_SIZE)]
@@ -418,12 +477,14 @@ class GeneticAlgorithmGenerator(SituationGenerator):
                     _clamp(genome)
 
                 # Elitism: keep all-time best
-                worst_idx = min(range(self._POP_SIZE), key=lambda i: fitnesses[i])
+                worst_idx = min(range(self._POP_SIZE), key=lambda i: fitnesses[i].total)
                 offspring[worst_idx] = best_genome[:]
 
                 population = offspring
 
-        typer.echo(f"GA: done  best={best_score} violations")
+        typer.echo(
+            f"GA: done  best={best_score.violations} violations  fitness={best_score.total:.1f}"
+        )
         typer.echo(f"Generating {n} run(s) with best placement configuration...")
-        return {"entity_list": _decode_genome(best_genome, entity_types)}
+        return {"entity_list": _decode_genome(best_genome, entity_types), "paths": search_paths}
 
